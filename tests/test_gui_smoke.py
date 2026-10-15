@@ -76,3 +76,39 @@ def test_gui_available_helper():
     from ruijie_eporta.gui.app import gui_available
 
     assert gui_available() is True
+
+
+def test_open_config_reports_notepad_fallback(config_factory, monkeypatch):
+    """点击「配置文件」时必须有明确反馈（系统未关联 .yml 也要能打开）。"""
+
+    from ruijie_eporta.gui import app as app_module
+    from ruijie_eporta.gui.app import AppWindow
+    from ruijie_eporta.gui.controller import AppController
+
+    cfg = config_factory(extra='notify:\n  toast: false\n')
+    controller = AppController(cfg)
+    window = AppWindow(controller, start_watching=False, start_hidden=True)
+
+    try:
+        monkeypatch.setattr(app_module.winutil, 'open_path', lambda path, **kwargs: 'notepad')
+        window._on_open_config()
+        text = window.log_text.get('1.0', 'end')
+        assert '记事本' in text
+        assert '配置文件' in text
+    finally:
+        window.quit()
+
+
+def test_open_config_missing_path_is_reported(config_factory, monkeypatch):
+    from ruijie_eporta.gui.app import AppWindow
+    from ruijie_eporta.gui.controller import AppController
+
+    cfg = config_factory(extra='notify:\n  toast: false\n')
+    controller = AppController(cfg)
+    window = AppWindow(controller, start_watching=False, start_hidden=True)
+
+    try:
+        window._open_path_with_feedback('', '配置文件')
+        assert '找不到配置文件' in window.log_text.get('1.0', 'end')
+    finally:
+        window.quit()

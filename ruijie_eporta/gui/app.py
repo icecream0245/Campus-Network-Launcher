@@ -359,15 +359,36 @@ class AppWindow:
         self._append_log(message.replace('\n', ' '), 'ok' if want else 'info')
         self.autostart_var.set(self.controller.autostart_enabled())
 
+    def _open_path_with_feedback(self, path: str, label: str) -> None:
+        """打开文件并给出一致的界面反馈（成功/回退/失败都写日志）。"""
+
+        if not path:
+            self._append_log('找不到%s路径' % label, 'warn')
+            return
+        if not os.path.exists(path):
+            self._append_log('%s不存在：%s' % (label, path), 'warn')
+            return
+
+        result = winutil.open_path(path)
+        if result == 'default':
+            self._append_log('已用系统默认程序打开%s：%s' % (label, path))
+        elif result == 'notepad':
+            self._append_log('系统未关联该文件类型，已用记事本打开%s：%s' % (label, path), 'warn')
+        elif result == 'explorer':
+            self._append_log('无法直接打开%s，已在资源管理器中定位：%s' % (label, path), 'warn')
+        else:
+            self._append_log('打开%s失败：%s' % (label, path), 'error')
+            winutil.message_box(
+                '无法自动打开%s，请手动打开以下文件：\n%s' % (label, path),
+                '打开%s' % label,
+                winutil.MB_OK | winutil.MB_ICONWARNING,
+            )
+
     def _on_open_log(self) -> None:
-        path = self.controller.log_file_path()
-        if not winutil.open_path(path):
-            self._append_log('日志文件尚未生成：%s' % path, 'warn')
+        self._open_path_with_feedback(self.controller.log_file_path(), '日志文件')
 
     def _on_open_config(self) -> None:
-        path = self.controller.config_path
-        if not winutil.open_path(path):
-            self._append_log('无法打开配置文件：%s' % path, 'warn')
+        self._open_path_with_feedback(self.controller.config_path, '配置文件')
 
     # ------------------------------------------------------------------ #
     # 窗口生命周期

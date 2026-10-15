@@ -30,3 +30,6 @@ __pycache__/
 # 界面预览图（含本机账号信息，不提交）
 /ui-preview*.png
 /.screenshot.png
+
+# 提交信息临时文件
+/.commit-msg.txt
