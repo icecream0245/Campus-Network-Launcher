@@ -8,12 +8,14 @@
 * **指数退避**：登录失败后等待时间翻倍递增，默认上限 5 分钟，
   避免因参数错误被学校认证系统临时封禁（上游 README 提到过 3-5 分钟封禁）；
 * **可注入时钟与 sleep**：便于单元测试在不联网的情况下验证状态机；
+* **可注入 stop_event 与 listener**：供可视化界面即时停止并接收状态事件；
 * **单次模式保留上游行为**：已联网时询问是否断网。
 """
 
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Any, Callable, Dict, Optional
 
@@ -27,6 +29,16 @@ EXIT_OK = 0
 EXIT_AUTH_FAILED = 2
 
 _MAX_BACKOFF_EXPONENT = 20
+
+# 事件名（界面/托盘据此展示状态）
+EVENT_STATE = 'state'
+EVENT_WATCH_STARTED = 'watch_started'
+EVENT_WATCH_STOPPED = 'watch_stopped'
+EVENT_LOGIN_OK = 'login_ok'
+EVENT_LOGIN_FAIL = 'login_fail'
+EVENT_LOGOUT_OK = 'logout_ok'
+EVENT_LOGOUT_FAIL = 'logout_fail'
+EVENT_KEEPALIVE = 'keepalive'
 
 
 class Daemon:
@@ -44,6 +56,8 @@ class Daemon:
         online_probe: Optional[Callable[[], network.ProbeResult]] = None,
         reach_probe: Optional[Callable[[], bool]] = None,
         ask_disconnect: Optional[Callable[[], bool]] = None,
+        listener: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+        stop_event: Optional[threading.Event] = None,
     ) -> None:
         daemon_cfg = cfg.get('daemon', {})
         self.cfg = cfg
@@ -55,9 +69,13 @@ class Daemon:
             quiet=cfg.get('notify', {}).get('quiet', False),
             logger=self.log,
         )
-        self._sleep = sleep
+        # 提供了 stop_event 时，等待过程可被立即打断（界面点击"停止守护"）
+        self._sleep = stop_event.wait if stop_event is not None else sleep
         self._now = now
         self._stop = False
+        self._stop_event = stop_event
+        self.listener = listener
+        self._last_online: Optional[bool] = None
 
         self.server = str(cfg['url']['server'])
         self.probes = list(cfg.get('network', {}).get('probes') or network.DEFAULT_PROBES)
@@ -93,17 +111,39 @@ class Daemon:
         return winutil.ask_yes_no('设备目前已联网，是否需要断网？', '网络已连接')
 
     # ------------------------------------------------------------------ #
-    # 生命周期
+    # 生命周期与事件
     # ------------------------------------------------------------------ #
     def request_stop(self) -> None:
-        """请求退出守护循环（供信号处理调用）。"""
+        """请求退出守护循环（供信号处理与界面调用）。"""
 
         self._stop = True
-        self.log.info('收到退出信号，将在当前等待结束后停止…')
+        if self._stop_event is not None:
+            try:
+                self._stop_event.set()
+            except Exception:  # pragma: no cover
+                pass
+        self.log.info('收到停止请求，正在退出守护循环…')
 
     @property
     def stopping(self) -> bool:
         return self._stop
+
+    def _emit(self, event: str, **payload: Any) -> None:
+        """把事件推送给外部监听者（界面/托盘）。"""
+
+        if self.listener is None:
+            return
+        try:
+            self.listener(event, payload)
+        except Exception as exc:  # pragma: no cover - 监听者异常不影响守护逻辑
+            self.log.debug('事件回调异常：%s', exc)
+
+    def _emit_state(self, probe: network.ProbeResult) -> None:
+        """状态发生变化时才通知外部，避免刷屏。"""
+
+        if self._last_online != probe.online:
+            self._last_online = probe.online
+            self._emit(EVENT_STATE, online=probe.online, detail=probe.detail)
 
     # ------------------------------------------------------------------ #
     # 单次动作
@@ -115,12 +155,15 @@ class Daemon:
         result = self._client.login()
         if result.ok:
             self.failures = 0
-            self.log.info('认证成功：%s', result.message or '已联网')
+            message = result.message or '已联网'
+            self.log.info('认证成功：%s', message)
             self._notifier.info('联网成功', result.message or '网络已连接！')
+            self._emit(EVENT_LOGIN_OK, message=message)
             return EXIT_OK
         message = result.error or result.message or '未知错误'
         self.log.error('认证失败：%s', message)
         self._notifier.error('联网失败', message)
+        self._emit(EVENT_LOGIN_FAIL, message=message, failures=1)
         return EXIT_AUTH_FAILED
 
     def logout_once(self) -> int:
@@ -129,16 +172,19 @@ class Daemon:
         self.log.info('开始断网请求：%s', self.server)
         result = self._client.logout()
         if result.ok:
-            self.log.info('断网成功：%s', result.message or '已断网')
-            self._notifier.info('已断网', result.message or '断网成功！')
+            message = result.message or '断网成功！'
+            self.log.info('断网成功：%s', message)
+            self._notifier.info('已断网', message)
+            self._emit(EVENT_LOGOUT_OK, message=message)
             return EXIT_OK
         message = result.error or result.message or '未知错误'
         self.log.error('断网失败：%s', message)
         self._notifier.error('断网失败', message)
+        self._emit(EVENT_LOGOUT_FAIL, message=message)
         return EXIT_AUTH_FAILED
 
     def status(self) -> Dict[str, Any]:
-        """收集当前状态信息（供 --status 使用）。"""
+        """收集当前状态信息（供 --status 与界面使用）。"""
 
         probe = self._online_probe()
         reachable = self._reach_probe()
@@ -175,6 +221,7 @@ class Daemon:
                 return EXIT_OK
 
         probe = self._online_probe()
+        self._emit_state(probe)
         if probe.online:
             if self.disconnect_network:
                 if auto_disconnect is None:
@@ -202,6 +249,11 @@ class Daemon:
             self.max_retry_interval,
             '%.0fs' % self.keepalive_interval if self.keepalive_interval > 0 else '关闭',
         )
+        self._emit(
+            EVENT_WATCH_STARTED,
+            check_interval=self.check_interval,
+            keepalive_interval=self.keepalive_interval,
+        )
 
         iterations = 0
         while not self._stop:
@@ -211,6 +263,8 @@ class Daemon:
                 break
 
             probe = self._online_probe()
+            self._emit_state(probe)
+
             if probe.online:
                 if self.failures:
                     self.log.info('网络已恢复（%s）', probe.detail)
@@ -235,6 +289,7 @@ class Daemon:
             self._reconnect_once()
 
         self.log.info('守护模式已退出')
+        self._emit(EVENT_WATCH_STOPPED)
         return EXIT_OK
 
     def _reconnect_once(self) -> AuthResult:
@@ -245,8 +300,10 @@ class Daemon:
 
         if result.ok:
             self.failures = 0
-            self.log.info('认证成功：%s', result.message or '已联网')
+            message = result.message or '已联网'
+            self.log.info('认证成功：%s', message)
             self._notifier.info('联网成功', result.message or '网络已连接！')
+            self._emit(EVENT_LOGIN_OK, message=message)
             self._sleep(self.check_interval)
             return result
 
@@ -259,6 +316,7 @@ class Daemon:
                 '联网失败',
                 '%s\n已连续失败 %d 次，程序会继续尝试（等待 %.0f 秒）' % (message, self.failures, delay),
             )
+        self._emit(EVENT_LOGIN_FAIL, message=message, failures=self.failures, delay=delay)
         self._sleep(delay)
         return result
 
@@ -278,5 +336,6 @@ class Daemon:
         if self._now() - self._last_keepalive < self.keepalive_interval:
             return
         self.log.debug('发送保活探测，维持链路活跃')
-        self._online_probe()
+        probe = self._online_probe()
         self._last_keepalive = self._now()
+        self._emit(EVENT_KEEPALIVE, online=probe.online, detail=probe.detail)

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import os
+import subprocess
 import sys
 from typing import List, Optional
 
@@ -120,3 +122,25 @@ def run_powershell(script: str, timeout: float = 20.0, hidden: bool = True) -> O
         log.debug('PowerShell 返回码 %s：%s', completed.returncode, stderr)
         return None
     return completed.stdout.decode('utf-8', errors='replace')
+
+
+def open_path(path: str) -> bool:
+    """用系统默认程序打开文件或文件夹，成功返回 True。"""
+
+    if not path:
+        return False
+    target = os.path.abspath(str(path))
+    if not os.path.exists(target):
+        log.warning('路径不存在，无法打开：%s', target)
+        return False
+    try:
+        if IS_WINDOWS:
+            os.startfile(target)  # type: ignore[attr-defined]
+        elif sys.platform == 'darwin':
+            subprocess.Popen(['open', target])
+        else:
+            subprocess.Popen(['xdg-open', target])
+        return True
+    except Exception as exc:
+        log.warning('打开 %s 失败：%s', target, exc)
+        return False

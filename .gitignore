@@ -26,3 +26,7 @@ __pycache__/
 /pytest-of-*/
 /pip-*/
 /.tmp/
+
+# 界面预览图（含本机账号信息，不提交）
+/ui-preview*.png
+/.screenshot.png

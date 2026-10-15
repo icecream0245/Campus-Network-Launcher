@@ -4,7 +4,8 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+import time
+from typing import Any, Dict, List, Optional
 
 from ruijie_eporta.daemon import EXIT_AUTH_FAILED, EXIT_OK, Daemon
 from ruijie_eporta.eportal import AuthResult
@@ -19,6 +20,9 @@ def build_daemon(
     probes: Optional[List] = None,
     reachable: bool = True,
     notifier=None,
+    listener=None,
+    stop_event=None,
+    extra: Optional[Dict[str, Any]] = None,
 ):
     clock = clock or FakeClock()
     queue = list(probes or [])
@@ -37,6 +41,9 @@ def build_daemon(
         online_probe=online_probe_fn,
         reach_probe=lambda: reachable,
         ask_disconnect=lambda: True,
+        listener=listener,
+        stop_event=stop_event,
+        **(extra or {}),
     )
     return daemon, clock
 
@@ -181,6 +188,62 @@ def test_signal_stop_breaks_loop(config_factory):
     daemon._sleep = stop_after_first  # noqa: SLF001 - 测试内部行为
     daemon.run()
     assert daemon.stopping is True
+
+
+# --------------------------------------------------------------------------- #
+# 事件回调与可中断停止（可视化界面依赖这两项）
+# --------------------------------------------------------------------------- #
+def test_listener_receives_lifecycle_events(config_factory):
+    cfg = config_factory(extra='daemon:\n  check_interval: 5\n')
+    events: List[str] = []
+    client = FakeClient([AuthResult(True, 'success', '')])
+    daemon, _ = build_daemon(
+        cfg,
+        client=client,
+        probes=[offline_probe(), online_probe(), online_probe()],
+        listener=lambda event, payload: events.append(event),
+    )
+
+    daemon.run(max_iterations=2)
+
+    assert events[0] == 'watch_started'
+    assert 'login_ok' in events
+    assert 'state' in events
+    assert events[-1] == 'watch_stopped'
+
+
+def test_listener_exception_does_not_break_watch(config_factory):
+    cfg = config_factory()
+    client = FakeClient([AuthResult(True, 'success', '')])
+
+    def broken_listener(_event, _payload):
+        raise RuntimeError('监听者异常')
+
+    daemon, _ = build_daemon(cfg, client=client, probes=[online_probe()], listener=broken_listener)
+    assert daemon.run(max_iterations=1) == EXIT_OK
+
+
+def test_stop_event_interrupts_long_wait(config_factory):
+    import threading
+
+    cfg = config_factory(extra='daemon:\n  check_interval: 3600\n')
+    stop_event = threading.Event()
+    daemon = Daemon(
+        cfg,
+        FakeClient(),
+        notifier=RecordingNotifier(),
+        online_probe=lambda: online_probe(),
+        reach_probe=lambda: True,
+        stop_event=stop_event,
+    )
+
+    thread = threading.Thread(target=daemon.run, daemon=True)
+    thread.start()
+    time.sleep(0.2)
+    daemon.request_stop()
+    thread.join(timeout=3)
+
+    assert thread.is_alive() is False
 
 
 # --------------------------------------------------------------------------- #

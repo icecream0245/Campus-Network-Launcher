@@ -1,9 +1,9 @@
-# Ruijie-ePorta-Tool（本地迭代版 v1.7.0）
+# Ruijie-ePorta-Tool（本地迭代版 v1.8.0）
 
 基于 [Redlnn/Ruijie-ePorta-Tool](https://github.com/Redlnn/Ruijie-ePorta-Tool) v1.6 的**本地迭代分支**。
 
-上游作者已毕业并停止维护，此分支在其基础上把「跑一次就退出」的脚本重构成**可常驻的守护型工具**：
-掉线自动重连、可选保活、一键开机自启，并做了打包与依赖上的现代化改造。
+上游作者已毕业并停止维护。此分支把「跑一次就退出」的脚本重构成**带可视化界面的常驻守护工具**：
+系统托盘、实时状态、掉线自动重连、可选保活、一键开机自启，并做了依赖与打包上的现代化改造。
 原有的 v3 配置文件**无需任何修改**即可继续使用。
 
 <h4>权责声明（沿用上游）</h4>
@@ -13,45 +13,66 @@
 - 本程序不保证在任何环境下能够通过，也不保证按时改进，编写及维护纯属个人爱好
 - 本程序不保证经过严格测试对机器无害，由于未知的使用环境或不当的使用对机器造成的损害，责任由使用者全部承担
 
-## 简介
+## 界面预览
 
-通过 Python 标准库 `urllib` 发送 POST 请求，实现锐捷 ePortal Web 认证的登录 / 下线，
-并按需常驻后台自动维持在线状态。理论支持所有**登录不需要图形验证码**的学校。
+运行后是一个原生 Windows 窗口（tkinter）：
+
+- **顶部状态卡片**：彩色圆点 + 大字状态（已联网 / 未联网 / 未知），下面一行显示最近一次事件；
+- **信息区**：认证服务器、账号、守护模式运行时长、当前探测地址；
+- **按钮区**：立即登录、立即断网、刷新状态、开始/停止守护、开机自启（勾选框）、打开日志、打开配置文件；
+- **运行日志**：带时间戳的滚动日志，按成功（绿）/ 失败（红）/ 警告（黄）着色；
+- **底部**：当前日志文件路径。
+
+关闭窗口不会退出程序，而是**最小化到系统托盘**；托盘图标右下角的圆点颜色表示联网状态
+（绿=已联网、红=未联网、灰=未知），右键菜单可完成上面几乎所有操作，
+左键单击则重新打开主界面。
 
 ## 相比上游 v1.6 的变化
 
-| 能力 | 上游 v1.6 | 本迭代版 v1.7 |
+| 能力 | 上游 v1.6 | 本迭代版 v1.8 |
 | --- | --- | --- |
-| 运行方式 | 执行一次后退出 | 单次执行 + `--watch` 守护常驻 |
-| 掉线恢复 | 需人工/计划任务再次运行 | 自动检测并重连，失败按指数退避（默认 5s→…→300s 上限） |
+| 可视化界面 | 无（仅弹窗） | **主窗口 + 系统托盘**，状态与日志可视 |
+| 运行方式 | 执行一次后退出 | 界面常驻 / `--watch` 托盘后台 / `--once` 兼容旧行为 |
+| 掉线恢复 | 需人工再次运行 | 自动检测并重连，失败按指数退避（默认 5s→…→300s 上限） |
 | 保活 | 无 | `keepalive_interval` 定期探测，维持链路活跃 |
-| 开机自启 | 手工放快捷方式到启动目录 | `--install-autostart` / `--remove-autostart` 一条命令完成 |
-| 界面依赖 | tkinter（打包进 tcl/tk，体积大） | 原生 MessageBox + Windows Toast，**不打包 tkinter** |
-| 第三方依赖 | pywin32、tinyWinToast(git)、PyYAML | **仅 PyYAML** |
-| 依赖管理 | poetry，Python `>=3.9,<3.11` | 标准 `pyproject.toml` + `requirements.txt`，Python `>=3.9`（3.12 已验证） |
+| 开机自启 | 手工放快捷方式到启动目录 | 界面勾选或 `--install-autostart` 一键完成 |
+| 界面依赖 | tkinter（体积大且自启时会弹窗阻塞） | tkinter + pystray；守护模式不弹窗，托盘常驻 |
+| 第三方依赖 | pywin32、tinyWinToast(git)、PyYAML | PyYAML、pystray、Pillow（无 git 依赖） |
+| 依赖管理 | poetry，Python `>=3.9,<3.11` | 标准 `pyproject.toml` + `requirements.txt`，Python `>=3.9` |
 | 出错处理 | 直接抛异常退出 | 非 JSON / HTTP 错误 / 超时均给出明确提示并记录日志 |
-| 可测试性 | 无 | 内置 mock ePortal 服务器 + pytest 用例，离线可验证 |
+| 可测试性 | 无 | mock ePortal 服务器 + 95 项 pytest + 端到端自检脚本 |
 | 日志 | 无 | `logs/ruijie-eporta.log`，自动轮转，日志中不含密码 |
-| 打包产物 | `Ruijie_ePorta_Tool.exe` | 同上 + `Ruijie_ePorta_Tool_Console.exe`（排查用） |
 
 ## 快速开始
 
-### 方式一：使用打包好的 exe
+### 方式一：图形界面（推荐）
 
-1. 把 `Ruijie_ePorta_Tool.exe` 和你的 `config.yml` 放在**同一个目录**；
-2. 双击运行：行为与上游一致（检查校园网 → 已联网则询问是否断网 → 未联网则登录）；
-3. 安装开机自启（推荐，登录后自动保持在线）：
+把 `Ruijie_ePorta_Tool.exe` 和你的 `config.yml` 放在**同一个目录**，双击运行：
+界面打开并**自动开始守护**（可在界面上随时停止）。
 
-   ```powershell
-   .\Ruijie_ePorta_Tool.exe --install-autostart
-   ```
+### 方式二：托盘后台（开机自启使用的就是它）
 
-### 方式二：从源码运行
+```powershell
+.\Ruijie_ePorta_Tool.exe --watch --quiet      # 无窗口，仅托盘图标 + 守护
+.\Ruijie_ePorta_Tool.exe --install-autostart  # 装机自启（默认就是 --watch --quiet）
+```
+
+### 方式三：命令行
+
+```powershell
+.\Ruijie_ePorta_Tool.exe --once        # 旧版行为：检查校园网 → 已联网询问是否断网 → 未联网则登录
+.\Ruijie_ePorta_Tool.exe --login       # 只登录一次
+.\Ruijie_ePorta_Tool.exe --logout      # 只断网一次
+.\Ruijie_ePorta_Tool.exe --status      # 输出状态 JSON（建议用 Console 版）
+```
+
+### 方式四：从源码运行
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m ruijie_eporta --watch
+.\.venv\Scripts\python.exe -m ruijie_eporta            # 打开界面
+.\.venv\Scripts\python.exe -m ruijie_eporta --watch    # 托盘后台守护
 ```
 
 ## 命令行用法
@@ -62,36 +83,27 @@ Ruijie_ePorta_Tool.exe [选项]
 
 | 选项 | 说明 |
 | --- | --- |
-| 无参数 | 与上游一致的单次模式：判断校园网 → 已联网询问是否断网 → 未联网则登录 |
-| `--watch` / `-w` | **守护模式**：常驻后台，掉线自动重连（推荐配合开机自启） |
-| `--login` | 只执行一次登录认证，然后退出 |
-| `--logout` | 只执行一次断网（下线） |
-| `--status` | 打印当前联网状态、配置路径与自启状态（建议用 Console 版查看） |
-| `--install-autostart` | 安装开机自启（方式由配置 `autostart.method` 决定） |
-| `--remove-autostart` | 卸载开机自启 |
-| `--yes` / `--no` | 已联网时直接选择断网 / 不断网，不弹窗（适合任务计划） |
-| `--quiet` | 静默：不弹通知，只写日志 |
-| `--no-toast` | 不使用 Windows 通知中心消息 |
-| `--dialog` | 额外弹出消息框提示 |
-| `--config PATH` | 指定配置文件路径（也可用环境变量 `RUJIE_EPORTA_CONFIG`） |
+| 无参数 | **打开图形界面并自动开始守护** |
+| `--gui` | 同上（显式指定） |
+| `--watch` / `-w` | 守护模式：默认最小化到托盘常驻 |
+| `--once` | 旧版单次流程：判断校园网 → 已联网询问是否断网 → 未联网则登录 |
+| `--login` / `--logout` | 只执行一次登录 / 断网（无界面） |
+| `--status` | 输出状态 JSON（无界面，Console 版可见） |
+| `--install-autostart` / `--remove-autostart` | 安装 / 卸载开机自启 |
+| `--no-watch` | 打开界面但不自动开始守护 |
+| `--no-tray` | 不创建托盘图标（`--watch` 时为纯后台运行） |
+| `--yes` / `--no` | 已联网时直接选择断网 / 不断网，不弹窗 |
+| `--quiet` | 不发送系统通知，只写日志 |
+| `--no-toast` / `--dialog` | 关闭 Windows 通知 / 额外弹出消息框 |
+| `--config PATH` | 指定配置文件（也可用环境变量 `RUJIE_EPORTA_CONFIG`） |
 | `--log-file PATH` | 指定日志文件 |
 | `--verbose` / `-v` | 输出调试日志 |
 | `--allow-multiple` | 允许同时运行多个实例（默认单实例） |
 | `--iterations N` | 守护模式最多循环 N 次后退出（调试用） |
 | `--version` | 显示版本 |
 
-### 常用组合
-
-```powershell
-# 开机自启 + 守护模式 + 静默（最省心的配置）
-.\Ruijie_ePorta_Tool.exe --install-autostart
-
-# 只想现在连上，不想弹窗
-.\Ruijie_ePorta_Tool.exe --login
-
-# 排查问题：看状态、看日志
-.\Ruijie_ePorta_Tool_Console.exe --status --verbose
-```
+> 程序默认单实例运行。若已有实例（例如开机自启的托盘守护）在运行，
+> 再次双击会提示「程序已在运行」，此时请**在系统托盘里打开主界面**。
 
 ## 配置文件
 
@@ -154,6 +166,8 @@ autostart:
 .\Ruijie_ePorta_Tool.exe --remove-autostart      # 卸载
 ```
 
+也可以在界面里直接勾选/取消「开机自启」。
+
 - 只影响当前用户，**不需要管理员权限**；
 - 想改用注册表方式：在配置中设置 `autostart.method: registry`；
 - 想调整自启参数（如加上 `--yes`）：修改 `autostart.args`。
@@ -169,21 +183,15 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 脚本会自动：创建 `.venv` → 安装依赖 → 运行测试 → 用 PyInstaller 打包，
 产物在 `dist\` 目录（`Ruijie_ePorta_Tool.exe` 与 `Ruijie_ePorta_Tool_Console.exe`）。
 
-也可以直接双击 `build.bat`（内部调用同一脚本）。常用参数：
-
-```powershell
-.\build.ps1 -Clean          # 清理 build/dist 后重建
-.\build.ps1 -SkipTests      # 跳过测试（不推荐）
-.\build.ps1 -SkipInstall    # 复用已有虚拟环境
-```
+常用参数：`-Clean`（先清理）、`-SkipTests`、`-SkipInstall`。也可以直接双击 `build.bat`。
 
 ## 测试
 
 所有测试都是**离线**的：`tests/mock_eportal.py` 会启动一个本地模拟 ePortal 服务器
-（同时提供 `generate_204` 探测端点），验证登录/断网、探测判定与重连状态机。
+（同时提供 `generate_204` 探测端点），验证登录/断网、探测判定、重连状态机与界面逻辑。
 
 ```powershell
-# 单元测试
+# 单元测试（配置 / 认证 / 探测 / 重连 / 界面控制器 / 托盘 / 界面冒烟）
 .\.venv\Scripts\python.exe -m pytest -q
 
 # 端到端自检（真实 CLI 对接本地模拟服务器，含掉线自动重连场景）
@@ -197,14 +205,15 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 
 - 少数受限环境（例如带应用白名单的终端管控软件）下，PyInstaller 单文件程序解包临时目录会失败，
   报 `Could not create temporary directory!`。此时可在 `Windows-Ruijie.spec` 中把
-  `runtime_tmpdir=None` 改为一个可写目录，或用
+  `runtime_tmpdir=None` 改为一个可写目录，或
   `pyinstaller --runtime-tmpdir "D:\some\writable\dir" Windows-Ruijie.spec` 重新打包。
+- 无桌面会话（例如以服务身份运行计划任务）时无法创建窗口，程序会自动回退为命令行模式。
 
 ## 局限性
 
 - 学校登录接口若要求图形验证码（`validcode`），本程序无法完成认证；
 - 抓包参数（`cookie`、`login_data`、`headers`）仍需按各自学校填写，参数写错可能被临时禁止登录；
-- 开机自启与 Toast 通知为 Windows 实现；
+- 开机自启与系统托盘、Toast 通知均为 Windows 实现；
 - 请遵守学校网络使用规定，本工具仅用于减少手动重复登录的操作成本。
 
 ## 许可
