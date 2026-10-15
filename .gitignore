@@ -1,6 +1,28 @@
-/.idea/
+# 虚拟环境与构建产物
+/.venv/
 /build/
 /dist/
-/src/__pycache__/
-/config.json
+/logs/
+*.spec.bak
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 本地配置（含账号凭据，切勿提交）
+/config.yml
 /src/config.json
+/config.json
+
+# 编辑器
+/.idea/
+/.vscode/
+
+# 临时目录（部分环境下 TMP 指向当前目录）
+/eporta-e2e-*/
+/pytest-of-*/
+/pip-*/
+/.tmp/
