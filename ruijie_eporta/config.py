@@ -101,6 +101,16 @@ notify:
 autostart:
   method: startup # startup = 启动目录快捷方式；registry = 注册表 Run 项
   args: --watch --quiet # 自启时附加的命令行参数
+
+# ==================== 免抓包模式（可选，强烈推荐） ====================
+# 打开后只需要填学号与密码：程序会自行访问认证页，自动获取
+# wlanuserip / mac / 公钥 等参数，无需再用浏览器抓包。
+# 启用后上面的 url / cookie / login_data.queryString / headers.Referer 都可以留空。
+auto:
+  enabled: false # 改成 true 即启用免抓包模式
+  user_id: '' # 你的学号（留空则使用 login_data.userId）
+  password: '' # 你的密码（明文，仅本机保存，请注意不要泄露本文件）
+  service: '' # 运营商/服务名，留空则自动使用认证页里的第一项
 '''
 
 DEFAULT_OPTIONS: Dict[str, Any] = {
@@ -135,6 +145,12 @@ DEFAULT_OPTIONS: Dict[str, Any] = {
     'autostart': {
         'method': 'startup',
         'args': '--watch --quiet',
+    },
+    'auto': {
+        'enabled': False,
+        'user_id': '',
+        'password': '',
+        'service': '',
     },
 }
 
@@ -294,6 +310,12 @@ def _normalize_options(cfg: Dict[str, Any]) -> None:
     autostart['method'] = method if method in ('startup', 'registry') else 'startup'
     autostart['args'] = str(autostart.get('args') or '--watch --quiet')
 
+    auto = cfg['auto']
+    auto['enabled'] = _as_bool(auto.get('enabled'), False)
+    auto['user_id'] = str(auto.get('user_id') or '').strip()
+    auto['password'] = str(auto.get('password') or '')
+    auto['service'] = str(auto.get('service') or '').strip()
+
 
 def _validate_version(cfg: Dict[str, Any]) -> None:
     main = cfg.get('main') or {}
@@ -314,13 +336,25 @@ def _validate_version(cfg: Dict[str, Any]) -> None:
 
 
 def _validate(cfg: Dict[str, Any]) -> None:
+    auto = cfg.get('auto') or {}
+    login_data = cfg.get('login_data') or {}
+
+    if bool(auto.get('enabled')):
+        # 免抓包模式：账号密码来自 auto 段，url / cookie / queryString 都不需要填
+        if not str(auto.get('user_id') or '').strip() and not str(login_data.get('userId') or '').strip():
+            raise ConfigError('免抓包模式需要填写 auto.user_id（你的学号）。')
+        if not str(auto.get('password') or '').strip():
+            raise ConfigError('免抓包模式需要填写 auto.password（你的密码）。')
+        if not cfg['network']['probes']:
+            raise ConfigError('配置项 network.probes 至少要保留一个探测地址。')
+        return
+
     url = cfg.get('url') or {}
     if not str(url.get('server') or '').strip():
         raise ConfigError('配置项 url.server 不能为空。')
     if not str(url.get('login') or '').strip():
         raise ConfigError('配置项 url.login 不能为空。')
 
-    login_data = cfg.get('login_data') or {}
     if str(login_data.get('userId') or '') == PLACEHOLDER_USER_ID:
         raise ConfigError('配置文件未正确填写：login_data.userId 仍是占位值，请填写你的账号。')
     if not str(login_data.get('userId') or '').strip():

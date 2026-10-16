@@ -84,6 +84,14 @@ class Daemon:
         self.check_school_network = bool(cfg.get('funtion', {}).get('check_school_network', True))
         self.disconnect_network = bool(cfg.get('funtion', {}).get('disconnect_network', True))
 
+        # 免抓包模式：登录时自动从认证页发现参数，不依赖抓包得到的 cookie/queryString
+        self.auto_enabled = bool((cfg.get('auto') or {}).get('enabled'))
+        self._auto_portal: Optional[Any] = None
+        if self.auto_enabled:
+            from .portal import PortalDiscovery
+
+            self._auto_portal = PortalDiscovery(probes=self.probes, timeout=self.probe_timeout, logger=self.log)
+
         self.check_interval = float(daemon_cfg.get('check_interval', 30) or 30)
         self.keepalive_interval = float(daemon_cfg.get('keepalive_interval', 0) or 0)
         self.retry_interval = float(daemon_cfg.get('retry_interval', 5) or 5)
@@ -146,13 +154,33 @@ class Daemon:
             self._emit(EVENT_STATE, online=probe.online, detail=probe.detail)
 
     # ------------------------------------------------------------------ #
+    # 登录入口（自动选择免抓包或抓包配置）
+    # ------------------------------------------------------------------ #
+    def _login(self) -> AuthResult:
+        """执行一次登录；免抓包模式下会先自动发现认证参数。"""
+
+        if self._auto_portal is None:
+            return self._client.login()
+
+        auto = self.cfg.get('auto') or {}
+        user_id = str(auto.get('user_id') or (self.cfg.get('login_data') or {}).get('userId') or '')
+        password = str(auto.get('password') or '')
+        service = str(auto.get('service') or '')
+        try:
+            return self._auto_portal.login(user_id, password, service)
+        except Exception as exc:
+            message = '%s: %s' % (type(exc).__name__, exc)
+            self.log.warning('免抓包登录失败：%s', message)
+            return AuthResult(False, status=None, error=message)
+
+    # ------------------------------------------------------------------ #
     # 单次动作
     # ------------------------------------------------------------------ #
     def login_once(self) -> int:
         """执行一次登录认证。"""
 
         self.log.info('开始登录认证：%s', self.server)
-        result = self._client.login()
+        result = self._login()
         if result.ok:
             self.failures = 0
             message = result.message or '已联网'
@@ -296,7 +324,7 @@ class Daemon:
         """掉线后的一次重连尝试，内部完成退避等待。"""
 
         self.log.info('检测到未联网，开始第 %d 次重连尝试…', self.failures + 1)
-        result = self._client.login()
+        result = self._login()
 
         if result.ok:
             self.failures = 0

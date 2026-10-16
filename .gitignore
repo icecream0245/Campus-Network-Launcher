@@ -27,9 +27,15 @@ __pycache__/
 /pip-*/
 /.tmp/
 
+# 认证页侦察脚本的产物
+/eporta_probe/
+
 # 界面预览图（含本机账号信息，不提交）
 /ui-preview*.png
 /.screenshot.png
 
 # 提交信息临时文件
 /.commit-msg.txt
+
+# 配置备份（含账号信息，绝不提交）
+/backups/

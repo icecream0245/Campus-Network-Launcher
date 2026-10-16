@@ -109,6 +109,33 @@ Ruijie_ePorta_Tool.exe [选项]
 > 程序默认单实例运行。若已有实例（例如开机自启的托盘守护）在运行，
 > 再次双击会提示「程序已在运行」，此时请**在系统托盘里打开主界面**。
 
+## 免抓包模式（推荐）
+
+不想抓包？把 `config.yml` 里的 `auto` 段填两行即可：
+
+```yaml
+auto:
+  enabled: true
+  user_id: '你的学号'
+  password: '你的密码'
+  service: '中国电信' # 留空则使用学校默认运营商
+```
+
+启用后 `url` / `cookie` / `login_data.queryString` / `headers.Referer` **都可以留空**。
+
+程序会自动完成原来需要抓包才能拿到的步骤：
+
+1. 访问探测地址时**不跟随重定向**，从网关返回的 `Location` 中取得认证页地址，以及
+   `wlanuserip`、`mac`、`nasid`、`vid` 等参数；
+2. 打开认证页，建立 `JSESSIONID` 会话；
+3. 调用 `InterFace.do?method=pageInfo` 取得 RSA 公钥与运营商列表；
+4. 按认证页 `security.js` 的算法加密密码：明文为 `密码>mac`，**反转**后做**原生 RSA**
+   （无 PKCS#1 填充），输出十六进制；
+5. 组装登录表单（`queryString` 为原始查询串的单次 URL 编码）并提交。
+
+> ⚠️ `auto.password` 是**明文**保存的，请勿把填好密码的 `config.yml` 发给别人。
+> 想确认生效情况，可看界面日志或运行 `--status`，日志里会打印实际使用的服务器与运营商。
+
 ## 配置文件
 
 配置文件名固定为 `config.yml`，放在 exe（或项目根目录）旁边；
