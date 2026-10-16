@@ -13,8 +13,10 @@ from __future__ import annotations
 import copy
 import logging
 import os
+import shutil
 import sys
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
@@ -111,6 +113,7 @@ auto:
   user_id: '' # 你的学号（留空则使用 login_data.userId）
   password: '' # 你的密码（明文，仅本机保存，请注意不要泄露本文件）
   service: '' # 运营商/服务名，留空则自动使用认证页里的第一项
+# 想把这些参数固化进配置文件（等价于自动抓包），可运行：--auto-setup
 '''
 
 DEFAULT_OPTIONS: Dict[str, Any] = {
@@ -158,6 +161,113 @@ DEFAULT_OPTIONS: Dict[str, Any] = {
 # --------------------------------------------------------------------------- #
 # 路径处理
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# 自动配置：把探测结果写入配置文件
+# --------------------------------------------------------------------------- #
+DISCOVERED_HEADER = """\
+# ============================================================================
+#  锐捷 ePortal 校园网自动登录工具 —— 由程序自动探测生成的配置
+#
+#  生成时间：{time}
+#  认证服务器：{server}
+#  运营商    ：{service}
+#
+#  说明：
+#    * 下面的 url / cookie / login_data / headers 是本程序访问学校认证页
+#      自动取得的参数，等价于一次"抓包"的结果；其中 password 是按本机 MAC
+#      加密后的密文，queryString 与本机 IP/MAC 绑定。
+#    * 换网络环境后若登录失败，可执行 --auto-setup 重新生成，
+#      或把 auto.enabled 设为 true 让程序每次登录都自动重新探测（最省心）。
+#    * ⚠️ 本文件含账号与密码信息，请勿外发。
+# ============================================================================
+
+"""
+
+
+def render_config_text(cfg: Dict[str, Any], *, header: str = '') -> str:
+    """把配置字典渲染成 YAML 文本（保留字段顺序、支持中文）。"""
+
+    body = yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False, default_flow_style=False, width=1000)
+    return header + body
+
+
+def build_config_from_discovery(discovered: Dict[str, Any], *, auto_cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """由自动探测结果构造一份完整、可写入的配置。"""
+
+    cfg: Dict[str, Any] = {
+        'main': {'version': CONFIG_VERSION},
+        'funtion': {
+            'check_school_network': True,
+            'disconnect_network': True,
+        },
+        'url': dict(discovered.get('url') or {}),
+        'cookie': str(discovered.get('cookie') or ''),
+        'login_data': dict(discovered.get('login_data') or {}),
+        'logout_data': {},
+        'headers': dict(discovered.get('headers') or {}),
+    }
+    for key, value in DEFAULT_OPTIONS.items():
+        if key == 'auto':
+            continue
+        cfg[key] = copy.deepcopy(value)
+    cfg['auto'] = dict(auto_cfg or DEFAULT_OPTIONS['auto'])
+    return cfg
+
+
+def save_config(
+    path: str,
+    cfg: Dict[str, Any],
+    *,
+    header: str = '',
+    backup: bool = True,
+) -> Tuple[str, str]:
+    """把配置写入文件（先备份，再原子替换）。
+
+    Returns:
+        Tuple[str, str]: (写入的配置文件路径, 备份文件路径；未备份时为空串)
+    """
+
+    target = os.path.abspath(path)
+    parent = os.path.dirname(target)
+    if parent and not os.path.isdir(parent):
+        os.makedirs(parent, exist_ok=True)
+
+    backup_path = ''
+    if backup and os.path.isfile(target):
+        stamp = time.strftime('%Y%m%d-%H%M%S')
+        backup_path = '%s.bak-%s' % (target, stamp)
+        try:
+            shutil.copy2(target, backup_path)
+        except OSError as exc:
+            raise ConfigError('备份原配置失败（%s）：%s' % (target, exc)) from exc
+
+    text = render_config_text(cfg, header=header)
+    temp_path = target + '.tmp'
+    try:
+        with open(temp_path, 'w', encoding='utf-8') as fp:
+            fp.write(text)
+        os.replace(temp_path, target)
+    except OSError as exc:
+        if os.path.isfile(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+        raise ConfigError('写入配置文件失败（%s）：%s' % (target, exc)) from exc
+    return target, backup_path
+
+
+def discovered_header(discovered: Dict[str, Any]) -> str:
+    """生成自动配置文件的头部注释。"""
+
+    details = discovered.get('details') or {}
+    return DISCOVERED_HEADER.format(
+        time=time.strftime('%Y-%m-%d %H:%M:%S'),
+        server=(discovered.get('url') or {}).get('server', '-'),
+        service=details.get('service_used') or '-',
+    )
+
+
 def program_dir() -> str:
     """程序所在目录：打包后是 exe 所在目录，否则是项目根目录。"""
 

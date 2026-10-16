@@ -40,6 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument('--login', action='store_true', help='只执行一次登录认证（无界面）')
     mode.add_argument('--logout', action='store_true', help='只执行一次断网（无界面）')
     mode.add_argument('--status', action='store_true', help='输出当前网络状态 JSON（无界面）')
+    mode.add_argument('--auto-setup', action='store_true', help='自动获取认证参数并写入配置文件（免抓包）')
     mode.add_argument('--install-autostart', action='store_true', help='安装开机自启')
     mode.add_argument('--remove-autostart', action='store_true', help='卸载开机自启')
 
@@ -162,6 +163,70 @@ def _try_gui(
         return None
 
 
+def _run_auto_setup(cfg: dict, logger: logging.Logger, args: argparse.Namespace) -> int:
+    """执行一次自动配置：探测认证参数并写回 config.yml。"""
+
+    from .portal import PortalDiscovery
+
+    auto = cfg.get('auto') or {}
+    login_data = cfg.get('login_data') or {}
+    user_id = str(auto.get('user_id') or login_data.get('userId') or '')
+    password = str(auto.get('password') or '')
+    service = str(auto.get('service') or '')
+
+    if not user_id or not password:
+        message = '自动配置需要先在 config.yml 的 auto 段填写 user_id（学号）与 password（密码）。'
+        logger.error(message)
+        if not args.quiet:
+            winutil.message_box(message, '自动配置', winutil.MB_OK | winutil.MB_ICONWARNING)
+        return 1
+
+    discovery = PortalDiscovery(
+        probes=cfg['network']['probes'],
+        timeout=cfg['network']['timeout'],
+        logger=logger,
+    )
+    try:
+        discovered = discovery.setup_config(user_id, password, service)
+    except Exception as exc:
+        message = '自动获取认证参数失败：%s' % exc
+        logger.error(message)
+        if not args.quiet:
+            winutil.message_box(message, '自动配置', winutil.MB_OK | winutil.MB_ICONERROR)
+        return 1
+
+    new_cfg = config.build_config_from_discovery(discovered, auto_cfg=auto)
+    try:
+        path, backup = config.save_config(
+            cfg.get('_config_path') or config.default_config_path(),
+            new_cfg,
+            header=config.discovered_header(discovered),
+        )
+    except config.ConfigError as exc:
+        logger.error('%s', exc)
+        if not args.quiet:
+            winutil.message_box(str(exc), '自动配置', winutil.MB_OK | winutil.MB_ICONERROR)
+        return 1
+
+    details = discovered.get('details') or {}
+    message = (
+        '已自动获取认证参数并写入配置\n'
+        '文件：%s\n备份：%s\n'
+        '服务器：%s\n运营商：%s（密码加密：%s）'
+        % (
+            path,
+            backup or '(无)',
+            (discovered.get('url') or {}).get('server', '-'),
+            details.get('service_used') or '-',
+            '是' if details.get('password_encrypted') else '否',
+        )
+    )
+    logger.info('%s', message.replace('\n', ' '))
+    if not args.quiet:
+        winutil.message_box(message, '自动配置完成', winutil.MB_OK | winutil.MB_ICONINFORMATION)
+    return EXIT_OK
+
+
 def _print_status(daemon: Daemon, cfg: dict) -> int:
     info = daemon.status()
     info['config_version'] = (cfg.get('main') or {}).get('version')
@@ -206,6 +271,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     daemon = Daemon(cfg, notifier=notifier, logger=logging.getLogger('ruijie_eporta.daemon'))
 
+    if args.auto_setup:
+        return _run_auto_setup(cfg, logger, args)
     if args.status:
         return _print_status(daemon, cfg)
     if args.login:

@@ -13,6 +13,7 @@ from ruijie_eporta.portal import (
     PortalDiscovery,
     build_encrypted_password,
     choose_service,
+    normalize_service,
     rsa_encrypt_raw,
 )
 from tests.mock_portal import MockPortalServer
@@ -192,7 +193,7 @@ def test_full_auto_login_success(portal):
     assert portal.state.login_calls == 1
     form = portal.state.last_login_form
     assert form['userId'] == portal.state.user_id
-    assert form['service'] == '中国电信'
+    assert form['service'] == urllib.parse.quote('中国电信')
     assert form['passwordEncrypt'] == 'true'
     assert form['password'] == portal.state.expect_password
     # queryString 必须是"单次 URL 编码"形式
@@ -254,3 +255,74 @@ def test_login_survives_non_json_response(portal):
     # 没有模数时应退回明文密码而不是崩溃
     assert result.ok is True
     assert portal.state.last_login_form['passwordEncrypt'] == 'false'
+
+# --------------------------------------------------------------------------- #
+# service 编码 与 自动配置（首次运行写回 config.yml）
+# --------------------------------------------------------------------------- #
+def test_normalize_service_is_single_encoding_and_idempotent():
+    encoded = urllib.parse.quote('中国电信')
+
+    assert normalize_service('中国电信') == encoded
+    assert normalize_service(encoded) == encoded
+    assert normalize_service('') == ''
+
+
+def test_login_sends_encoded_service(portal):
+    portal.state.online = False
+    portal.state.expect_password = build_encrypted_password(
+        portal.state.password, portal.state.mac, portal.state.modulus, portal.state.exponent
+    )
+    discovery = PortalDiscovery(probes=[portal.base_url + '/generate_204'], timeout=3)
+
+    discovery.login(portal.state.user_id, portal.state.password, '中国电信')
+
+    assert portal.state.last_login_form['service'] == urllib.parse.quote('中国电信')
+
+
+def test_setup_config_returns_writable_values(portal):
+    portal.state.online = False
+    discovery = PortalDiscovery(probes=[portal.base_url + '/generate_204'], timeout=3)
+
+    result = discovery.setup_config(portal.state.user_id, portal.state.password, '中国电信')
+
+    assert result['url']['server'] == portal.base_url
+    assert result['url']['login'].endswith('method=login')
+    assert result['login_data']['userId'] == portal.state.user_id
+    assert result['login_data']['passwordEncrypt'] == 'true'
+    assert len(result['login_data']['password']) == len(portal.state.modulus)
+    assert result['login_data']['service'] == urllib.parse.quote('中国电信')
+    assert result['login_data']['queryString'] == urllib.parse.quote(portal.state.portal_query(), safe='')
+    assert result['headers']['Referer'].startswith(portal.base_url + '/eportal/index.jsp?')
+    assert 'JSESSIONID' in result['cookie']
+    assert result['details']['password_encrypted'] is True
+    assert result['details']['mac'] == portal.state.mac
+    # 自动配置不应触发登录请求
+    assert portal.state.login_calls == 0
+
+
+def test_setup_config_requires_credentials(portal):
+    portal.state.online = False
+    discovery = PortalDiscovery(probes=[portal.base_url + '/generate_204'], timeout=3)
+
+    with pytest.raises(AutoLoginError):
+        discovery.setup_config('', '')
+
+
+def test_setup_config_refuses_when_online(portal):
+    portal.state.online = True
+    discovery = PortalDiscovery(probes=[portal.base_url + '/generate_204'], timeout=3)
+
+    with pytest.raises(AutoLoginError):
+        discovery.setup_config(portal.state.user_id, portal.state.password)
+
+
+def test_setup_config_without_encryption(portal):
+    portal.state.online = False
+    portal.state.password_encrypt = False
+    portal.state.modulus = ''
+    discovery = PortalDiscovery(probes=[portal.base_url + '/generate_204'], timeout=3)
+
+    result = discovery.setup_config(portal.state.user_id, portal.state.password, '中国电信')
+
+    assert result['login_data']['passwordEncrypt'] == 'false'
+    assert result['login_data']['password'] == portal.state.password

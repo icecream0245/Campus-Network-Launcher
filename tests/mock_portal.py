@@ -99,7 +99,7 @@ class MockPortalHandler(BaseHTTPRequestHandler):
                 '<input id="publicKeyModulus" value="">'
                 '</body></html>'
             )
-            self._send(200, html.encode('utf-8'))
+            self._send(200, html.encode('utf-8'), Set_Cookie='JSESSIONID=MOCKSESSION123; Path=/eportal')
         else:
             self._send(404, b'not found')
 

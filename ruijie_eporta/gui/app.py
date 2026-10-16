@@ -45,6 +45,7 @@ TAG_COLORS = {
 }
 
 EVENT_TAGS = {
+    'auto_setup_ok': 'ok',
     'login_ok': 'ok',
     'logout_ok': 'ok',
     'login_fail': 'error',
@@ -96,6 +97,10 @@ class AppWindow:
 
         self.root.after(POLL_INTERVAL_MS, self._pump)
         self.root.after(150, self.controller.refresh_status)
+        # 首次运行且尚未抓包时，自动获取参数并写回配置
+        if self.controller.needs_auto_setup():
+            self._append_log('检测到还未抓包，正在自动获取认证参数…', 'warn')
+            self.root.after(600, self.controller.auto_setup)
 
     # ------------------------------------------------------------------ #
     # 界面构建
@@ -179,6 +184,10 @@ class AppWindow:
 
         self.refresh_btn = ttk.Button(panel, text='刷新状态', width=12, command=self._on_refresh)
         self.refresh_btn.grid(row=0, column=2, padx=(0, 8), pady=3)
+
+        ttk.Button(panel, text='自动获取参数', width=12, command=self._on_auto_setup).grid(
+            row=0, column=3, padx=(0, 8), pady=3
+        )
 
         self.watch_btn = ttk.Button(panel, text='开始守护', width=12, command=self._on_toggle_watch)
         self.watch_btn.grid(row=1, column=0, padx=(0, 8), pady=3)
@@ -335,6 +344,10 @@ class AppWindow:
 
     def _on_logout(self) -> None:
         if not self.controller.logout_now():
+            self._append_log('已有任务在执行，请稍候…', 'warn')
+
+    def _on_auto_setup(self) -> None:
+        if not self.controller.auto_setup():
             self._append_log('已有任务在执行，请稍候…', 'warn')
 
     def _on_refresh(self) -> None:

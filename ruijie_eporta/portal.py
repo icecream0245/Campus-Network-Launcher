@@ -104,6 +104,20 @@ def build_encrypted_password(password: str, mac: str, modulus_hex: str, exponent
     return rsa_encrypt_raw(payload, modulus_hex, exponent_hex)
 
 
+def normalize_service(value: str) -> str:
+    """把 service 规范成「单次 URL 编码」形式。
+
+    认证页提交的 service 是 URL 编码后的字符串（例如
+    ``%E4%B8%AD%E5%9B%BD%E7%94%B5%E4%BF%A1``）；由于我们随后还会用
+    ``urlencode`` 组装表单，这里必须先编码一次，否则服务端收到的是原文而匹配不上。
+    无论是传中文还是已编码的值，本函数都返回同样的单次编码结果（幂等）。
+    """
+
+    if not value:
+        return ''
+    return urllib.parse.quote(urllib.parse.unquote(value), safe='')
+
+
 def choose_service(page_info: Dict[str, Any], preferred: str = '', html: str = '') -> str:
     """决定登录时使用的 ``service`` 值。
 
@@ -358,6 +372,7 @@ class PortalDiscovery:
 
         page = self.page_info(info)
         chosen_service = choose_service(page, service, html)
+        service_value = normalize_service(chosen_service)
         modulus = str(page.get('publicKeyModulus') or '')
         exponent = str(page.get('publicKeyExponent') or '10001')
         encrypt_flag = 'true' if str(page.get('passwordEncrypt') or '').lower() == 'true' and modulus else 'false'
@@ -370,7 +385,7 @@ class PortalDiscovery:
         form = {
             'userId': user_id,
             'password': encrypted_password,
-            'service': chosen_service,
+            'service': service_value,
             'queryString': info.encoded_query,
             'operatorPwd': '',
             'operatorUserId': '',
@@ -384,6 +399,66 @@ class PortalDiscovery:
             chosen_service or '(空)',
         )
         return self._post_login(info, form)
+
+    # ------------------------------------------------------------------ #
+    # 自动配置：把发现到的参数整理成可写回 config.yml 的形式
+    # ------------------------------------------------------------------ #
+    def cookie_header(self) -> str:
+        """把当前会话的 cookie 拼成 Cookie 头字符串。"""
+
+        return '; '.join('%s=%s' % (cookie.name, cookie.value) for cookie in self._jar)
+
+    def setup_config(self, user_id: str, password: str, service: str = '') -> Dict[str, Any]:
+        """执行一次自动发现，返回可直接写入配置文件的参数。
+
+        只访问认证页与 pageInfo，**不会发送登录请求**，因此不会影响当前联网状态。
+
+        Raises:
+            AutoLoginError: 当前已在线（拿不到认证页参数）或发现过程失败。
+        """
+
+        if not user_id or not password:
+            raise AutoLoginError('自动配置需要学号与密码')
+
+        info, html = self.discover()
+        if info is None:
+            raise AutoLoginError('当前已在线，拿不到认证页参数；请先断开校园网再执行自动配置')
+
+        page = self.page_info(info)
+        chosen_service = choose_service(page, service, html)
+        modulus = str(page.get('publicKeyModulus') or '')
+        exponent = str(page.get('publicKeyExponent') or '10001')
+        encrypt = str(page.get('passwordEncrypt') or '').lower() == 'true' and bool(modulus)
+        encrypted = build_encrypted_password(password, info.mac, modulus, exponent) if encrypt else password
+
+        services = page.get('service')
+        return {
+            'url': {
+                'server': info.server,
+                'login': '/eportal/InterFace.do?method=login',
+                'logout': '/eportal/InterFace.do?method=logout',
+            },
+            'cookie': self.cookie_header(),
+            'login_data': {
+                'userId': user_id,
+                'password': encrypted,
+                'service': normalize_service(chosen_service),
+                'queryString': info.encoded_query,
+                'operatorPwd': '',
+                'operatorUserId': '',
+                'validcode': '',
+                'passwordEncrypt': 'true' if encrypt else 'false',
+            },
+            'headers': {'Referer': info.portal_url},
+            'details': {
+                'mac': info.mac,
+                'portal_url': info.portal_url,
+                'services': list(services.keys()) if isinstance(services, dict) else [],
+                'service_used': chosen_service,
+                'password_encrypted': encrypt,
+                'modulus_bits': len(modulus) * 4 if modulus else 0,
+            },
+        }
 
     def _post_login(self, info: PortalInfo, form: Dict[str, str]) -> AuthResult:
         payload = urllib.parse.urlencode(form, doseq=True).encode('utf-8')

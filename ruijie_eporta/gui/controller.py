@@ -284,6 +284,63 @@ class AppController:
             self.start_watch()
 
     # ------------------------------------------------------------------ #
+    # 自动配置（首次运行自动获取参数并写回 config.yml）
+    # ------------------------------------------------------------------ #
+    def needs_auto_setup(self) -> bool:
+        """是否需要首次自动获取参数：启用了免抓包、有密码、但还没有抓包参数。"""
+
+        auto = self.cfg.get('auto') or {}
+        if not bool(auto.get('enabled')):
+            return False
+        if not str(auto.get('password') or '').strip():
+            return False
+        if not str(auto.get('user_id') or (self.cfg.get('login_data') or {}).get('userId') or '').strip():
+            return False
+        return not str((self.cfg.get('login_data') or {}).get('queryString') or '').strip()
+
+    def auto_setup(self) -> bool:
+        """在后台执行自动配置，成功后会覆盖写入 config.yml（带备份）。"""
+
+        def task() -> None:
+            from .. import config as config_module
+            from ..portal import PortalDiscovery
+
+            auto = self.cfg.get('auto') or {}
+            login_data = self.cfg.get('login_data') or {}
+            user_id = str(auto.get('user_id') or login_data.get('userId') or '')
+            password = str(auto.get('password') or '')
+            service = str(auto.get('service') or '')
+            self._post('info', '正在访问学校认证页，自动获取参数…')
+            try:
+                discovery = PortalDiscovery(
+                    probes=self.cfg['network']['probes'],
+                    timeout=self.cfg['network']['timeout'],
+                    logger=self.log,
+                )
+                discovered = discovery.setup_config(user_id, password, service)
+                new_cfg = config_module.build_config_from_discovery(discovered, auto_cfg=auto)
+                path, backup = config_module.save_config(
+                    self.config_path,
+                    new_cfg,
+                    header=config_module.discovered_header(discovered),
+                )
+            except Exception as exc:
+                self.log.warning('自动配置失败：%s', exc)
+                self._post('error', '自动获取参数失败：%s' % exc)
+                return
+
+            details = discovered.get('details') or {}
+            message = '已自动获取参数并写入配置（服务器 %s，运营商 %s，备份 %s）' % (
+                (discovered.get('url') or {}).get('server', '-'),
+                details.get('service_used') or '-',
+                backup or '无',
+            )
+            self.log.info('%s', message)
+            self._post('auto_setup_ok', message, path=path, backup=backup)
+
+        return self._run_worker(task, 'eporta-auto-setup')
+
+    # ------------------------------------------------------------------ #
     # 开机自启
     # ------------------------------------------------------------------ #
     def autostart_method(self) -> str:
