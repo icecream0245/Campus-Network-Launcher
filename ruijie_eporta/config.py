@@ -13,6 +13,7 @@ from __future__ import annotations
 import copy
 import logging
 import os
+import re
 import shutil
 import sys
 import time
@@ -30,6 +31,10 @@ log = logging.getLogger(__name__)
 
 class ConfigError(Exception):
     """配置读取或校验失败。"""
+
+
+class ProfileIncompleteError(ConfigError):
+    """配置里还没有账号信息（首次运行需要引导用户填写）。"""
 
 
 DEFAULT_CONFIG_TEMPLATE = '''\
@@ -113,6 +118,7 @@ auto:
   user_id: '' # 你的学号（留空则使用 login_data.userId）
   password: '' # 你的密码（明文，仅本机保存，请注意不要泄露本文件）
   service: '' # 运营商/服务名，留空则自动使用认证页里的第一项
+  service_options: [] # 上次获取到的可选服务商（程序自动维护，可不填）
 # 想把这些参数固化进配置文件（等价于自动抓包），可运行：--auto-setup
 '''
 
@@ -154,6 +160,7 @@ DEFAULT_OPTIONS: Dict[str, Any] = {
         'user_id': '',
         'password': '',
         'service': '',
+        'service_options': [],
     },
 }
 
@@ -254,6 +261,155 @@ def save_config(
             except OSError:
                 pass
         raise ConfigError('写入配置文件失败（%s）：%s' % (target, exc)) from exc
+    return target, backup_path
+
+
+# --------------------------------------------------------------------------- #
+# 首次运行：账号是否已配置
+# --------------------------------------------------------------------------- #
+def is_profile_incomplete(cfg: Dict[str, Any]) -> bool:
+    """判断配置里是否还没有可用的账号信息。
+
+    只要存在抓包参数（queryString），就认为配置可用（老用户的老配置）。
+    """
+
+    login_data = cfg.get('login_data') or {}
+    if str(login_data.get('queryString') or '').strip():
+        return False
+
+    auto = cfg.get('auto') or {}
+    user_id = str(auto.get('user_id') or login_data.get('userId') or '').strip()
+    password = str(auto.get('password') or '').strip()
+    if not user_id or user_id == PLACEHOLDER_USER_ID:
+        return True
+    return not password
+
+
+def build_profile_fields(
+    user_id: str,
+    password: str,
+    service: str,
+    options: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """生成向导保存时要写入 auto 段的字段。"""
+
+    fields: Dict[str, Any] = {
+        'enabled': True,
+        'user_id': str(user_id or '').strip(),
+        'password': str(password or ''),
+        'service': str(service or '').strip(),
+    }
+    if options is not None:
+        fields['service_options'] = [str(item).strip() for item in options if str(item or '').strip()]
+    return fields
+
+
+# --------------------------------------------------------------------------- #
+# 局部写回：只改 auto 段，保留文件其余内容与注释
+# --------------------------------------------------------------------------- #
+AUTO_FIELD_ORDER = ('enabled', 'user_id', 'password', 'service', 'service_options')
+
+
+def _format_auto_value(key: str, value: Any) -> str:
+    if key == 'enabled':
+        return 'true' if value else 'false'
+    if key == 'service_options':
+        items = [str(item).strip() for item in (value or []) if str(item or '').strip()]
+        if not items:
+            return '[]'
+        return '[' + ', '.join("'%s'" % item.replace("'", "''") for item in items) + ']'
+    return "'%s'" % str(value if value is not None else '').replace("'", "''")
+
+
+def update_auto_fields(path: str, fields: Dict[str, Any], *, backup: bool = True) -> Tuple[str, str]:
+    """只修改 ``auto:`` 段内的若干键，保留文件其余内容与注释。
+
+    Args:
+        path: 配置文件路径。
+        fields: 要写入的键值（仅接受 ``AUTO_FIELD_ORDER`` 中的键）。
+        backup: 是否先备份原文件。
+
+    Returns:
+        Tuple[str, str]: (配置文件路径, 备份文件路径；未备份时为空串)
+
+    Raises:
+        ConfigError: 文件不存在、写入后 YAML 校验失败或写入失败（此时原文件不变）。
+    """
+
+    target = os.path.abspath(path)
+    if not os.path.isfile(target):
+        raise ConfigError('配置文件不存在：%s' % target)
+
+    with open(target, 'r', encoding='utf-8') as fp:
+        text = fp.read()
+
+    updates = {key: value for key, value in (fields or {}).items() if key in AUTO_FIELD_ORDER}
+    if not updates:
+        raise ConfigError('没有需要写入的 auto 字段')
+
+    lines = text.splitlines()
+    start = None
+    for index, line in enumerate(lines):
+        if line.strip() == 'auto:' and not line[:1].isspace():
+            start = index
+            break
+
+    if start is None:
+        # 没有 auto 段：追加一段
+        block = ['', 'auto:']
+        for key in AUTO_FIELD_ORDER:
+            if key in updates:
+                block.append('  %s: %s' % (key, _format_auto_value(key, updates[key])))
+        new_text = text.rstrip() + chr(10) + chr(10).join(block) + chr(10)
+    else:
+        end = len(lines)
+        for index in range(start + 1, len(lines)):
+            line = lines[index]
+            if line.strip() and not line[:1].isspace():
+                end = index
+                break
+        remaining = dict(updates)
+        body = []
+        for line in lines[start + 1:end]:
+            match = re.match(r'^(\s+)([A-Za-z_][A-Za-z0-9_]*):(.*)$', line)
+            if match and match.group(2) in remaining:
+                key = match.group(2)
+                body.append('%s%s: %s' % (match.group(1), key, _format_auto_value(key, remaining.pop(key))))
+            else:
+                body.append(line)
+        for key in AUTO_FIELD_ORDER:
+            if key in remaining:
+                body.append('  %s: %s' % (key, _format_auto_value(key, remaining.pop(key))))
+        new_text = '\n'.join(lines[:start + 1] + body + lines[end:]) + '\n'
+
+    try:
+        parsed = yaml.safe_load(new_text)
+    except yaml.YAMLError as exc:
+        raise ConfigError('写入后的配置无法解析，已放弃修改：%s' % exc) from exc
+    if not isinstance(parsed, dict) or not isinstance(parsed.get('auto'), dict):
+        raise ConfigError('写入后的配置结构异常，已放弃修改')
+
+    backup_path = ''
+    if backup:
+        stamp = time.strftime('%Y%m%d-%H%M%S')
+        backup_path = '%s.bak-%s' % (target, stamp)
+        try:
+            shutil.copy2(target, backup_path)
+        except OSError as exc:
+            raise ConfigError('备份原配置失败：%s' % exc) from exc
+
+    temp_path = target + '.tmp'
+    try:
+        with open(temp_path, 'w', encoding='utf-8') as fp:
+            fp.write(new_text)
+        os.replace(temp_path, target)
+    except OSError as exc:
+        if os.path.isfile(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+        raise ConfigError('写入配置文件失败：%s' % exc) from exc
     return target, backup_path
 
 
@@ -425,6 +581,12 @@ def _normalize_options(cfg: Dict[str, Any]) -> None:
     auto['user_id'] = str(auto.get('user_id') or '').strip()
     auto['password'] = str(auto.get('password') or '')
     auto['service'] = str(auto.get('service') or '').strip()
+    raw_options = auto.get('service_options')
+    if isinstance(raw_options, str):
+        raw_options = [raw_options]
+    auto['service_options'] = [
+        str(item).strip() for item in (raw_options or []) if str(item or '').strip()
+    ]
 
 
 def _validate_version(cfg: Dict[str, Any]) -> None:
@@ -452,9 +614,9 @@ def _validate(cfg: Dict[str, Any]) -> None:
     if bool(auto.get('enabled')):
         # 免抓包模式：账号密码来自 auto 段，url / cookie / queryString 都不需要填
         if not str(auto.get('user_id') or '').strip() and not str(login_data.get('userId') or '').strip():
-            raise ConfigError('免抓包模式需要填写 auto.user_id（你的学号）。')
+            raise ProfileIncompleteError('免抓包模式需要填写 auto.user_id（你的学号）。')
         if not str(auto.get('password') or '').strip():
-            raise ConfigError('免抓包模式需要填写 auto.password（你的密码）。')
+            raise ProfileIncompleteError('免抓包模式需要填写 auto.password（你的密码）。')
         if not cfg['network']['probes']:
             raise ConfigError('配置项 network.probes 至少要保留一个探测地址。')
         return
@@ -466,9 +628,9 @@ def _validate(cfg: Dict[str, Any]) -> None:
         raise ConfigError('配置项 url.login 不能为空。')
 
     if str(login_data.get('userId') or '') == PLACEHOLDER_USER_ID:
-        raise ConfigError('配置文件未正确填写：login_data.userId 仍是占位值，请填写你的账号。')
+        raise ProfileIncompleteError('配置文件未正确填写：login_data.userId 仍是占位值，请填写你的账号。')
     if not str(login_data.get('userId') or '').strip():
-        raise ConfigError('配置文件未正确填写：login_data.userId 不能为空。')
+        raise ProfileIncompleteError('配置文件未正确填写：login_data.userId 不能为空。')
 
     if not cfg['network']['probes']:
         raise ConfigError('配置项 network.probes 至少要保留一个探测地址。')
@@ -477,7 +639,12 @@ def _validate(cfg: Dict[str, Any]) -> None:
 # --------------------------------------------------------------------------- #
 # 对外接口
 # --------------------------------------------------------------------------- #
-def load_config(path: Optional[str] = None, *, create_if_missing: bool = True) -> Dict[str, Any]:
+def load_config(
+    path: Optional[str] = None,
+    *,
+    create_if_missing: bool = True,
+    allow_incomplete: bool = False,
+) -> Dict[str, Any]:
     """读取并校验配置，返回合并了默认值的字典。
 
     ``cfg['_config_path']`` 保存实际使用的配置文件路径。
@@ -514,9 +681,9 @@ def load_config(path: Optional[str] = None, *, create_if_missing: bool = True) -
     cfg['funtion']['disconnect_network'] = _as_bool(cfg['funtion'].get('disconnect_network'), True)
 
     for key in ('url', 'login_data', 'logout_data'):
-        value = cfg.get(key)
-        if isinstance(value, dict):
-            cfg[key] = stringify_leaf_values(value)
+        if not isinstance(cfg.get(key), dict):
+            cfg[key] = {}
+        cfg[key] = stringify_leaf_values(cfg[key])
 
     if cfg.get('logout_data') is None:
         cfg['logout_data'] = {}
@@ -532,7 +699,10 @@ def load_config(path: Optional[str] = None, *, create_if_missing: bool = True) -
     cfg['url']['server'] = server.rstrip('/')
 
     _normalize_options(cfg)
-    _validate(cfg)
+    if allow_incomplete:
+        cfg['_needs_profile'] = is_profile_incomplete(cfg)
+    else:
+        _validate(cfg)
 
     cfg['_config_path'] = config_path
     cfg.setdefault('main', {})

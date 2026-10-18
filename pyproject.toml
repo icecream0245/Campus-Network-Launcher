@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ruijie-eporta-tool"
-version = "1.10.0"
+version = "1.11.0"
 description = "锐捷 ePortal 校园网自动登录工具：可视化界面、系统托盘、守护模式、掉线自动重连、开机自启（上游 Redlnn/Ruijie-ePorta-Tool 的本地迭代版）"
 readme = "README.md"
 requires-python = ">=3.9"

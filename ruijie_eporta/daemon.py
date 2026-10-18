@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from . import network, winutil
 from .eportal import AuthResult, EportalClient
@@ -39,6 +39,7 @@ EVENT_LOGIN_FAIL = 'login_fail'
 EVENT_LOGOUT_OK = 'logout_ok'
 EVENT_LOGOUT_FAIL = 'logout_fail'
 EVENT_KEEPALIVE = 'keepalive'
+EVENT_SERVICE_REJECTED = 'service_rejected'
 
 
 class Daemon:
@@ -105,6 +106,9 @@ class Daemon:
 
         self.failures = 0
         self._last_keepalive = self._now()
+        # 已提示过的服务商（避免反复弹窗）与最近一次的服务商列表
+        self._service_prompted: set = set()
+        self._last_services: List[str] = []
 
     # ------------------------------------------------------------------ #
     # 默认探测实现
@@ -174,6 +178,33 @@ class Daemon:
             return AuthResult(False, status=None, error=message)
 
     # ------------------------------------------------------------------ #
+    # 服务商相关（失败重试）
+    # ------------------------------------------------------------------ #
+    def _maybe_emit_service_rejected(self, message: str) -> None:
+        """疑似服务商不匹配时通知界面（同一服务商只提示一次）。"""
+
+        from .portal import is_service_error
+
+        if not is_service_error(message):
+            return
+        service = str((self.cfg.get('auto') or {}).get('service') or '').strip()
+        if service in self._service_prompted:
+            return
+        self._service_prompted.add(service)
+        services = list(getattr(self._auto_portal, 'last_services', None) or self._last_services or [])
+        self.log.info('疑似服务商不匹配（当前：%s），等待用户确认', service or '(未设置)')
+        self._emit(EVENT_SERVICE_REJECTED, message=message, service=service, services=services)
+
+    def update_service(self, service: str) -> None:
+        """更新当前使用的服务商（下次登录生效），并允许再次提示。"""
+
+        auto = self.cfg.get('auto')
+        if isinstance(auto, dict):
+            auto['service'] = str(service or '').strip()
+        self._service_prompted.clear()
+        self.log.info('服务商已更新为：%s', service or '(未设置)')
+
+    # ------------------------------------------------------------------ #
     # 单次动作
     # ------------------------------------------------------------------ #
     def login_once(self) -> int:
@@ -186,12 +217,14 @@ class Daemon:
             message = result.message or '已联网'
             self.log.info('认证成功：%s', message)
             self._notifier.info('联网成功', result.message or '网络已连接！')
+            self._service_prompted.clear()
             self._emit(EVENT_LOGIN_OK, message=message)
             return EXIT_OK
         message = result.error or result.message or '未知错误'
         self.log.error('认证失败：%s', message)
         self._notifier.error('联网失败', message)
         self._emit(EVENT_LOGIN_FAIL, message=message, failures=1)
+        self._maybe_emit_service_rejected(message)
         return EXIT_AUTH_FAILED
 
     def logout_once(self) -> int:
@@ -331,6 +364,7 @@ class Daemon:
             message = result.message or '已联网'
             self.log.info('认证成功：%s', message)
             self._notifier.info('联网成功', result.message or '网络已连接！')
+            self._service_prompted.clear()
             self._emit(EVENT_LOGIN_OK, message=message)
             self._sleep(self.check_interval)
             return result
@@ -345,6 +379,7 @@ class Daemon:
                 '%s\n已连续失败 %d 次，程序会继续尝试（等待 %.0f 秒）' % (message, self.failures, delay),
             )
         self._emit(EVENT_LOGIN_FAIL, message=message, failures=self.failures, delay=delay)
+        self._maybe_emit_service_rejected(message)
         self._sleep(delay)
         return result
 

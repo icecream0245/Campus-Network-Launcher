@@ -28,6 +28,7 @@ from .controller import (
     UiEvent,
     summarize_probes,
 )
+from .dialogs import ServicePicker, SetupWizard
 from .tray import TrayIcon, status_hex
 
 log = logging.getLogger(__name__)
@@ -46,6 +47,7 @@ TAG_COLORS = {
 
 EVENT_TAGS = {
     'auto_setup_ok': 'ok',
+    'service_rejected': 'warn',
     'login_ok': 'ok',
     'logout_ok': 'ok',
     'login_fail': 'error',
@@ -73,6 +75,8 @@ class AppWindow:
         self._closing = False
         self._tray_hint_shown = False
         self._last_tray_update = 0.0
+        self._wizard: Optional[SetupWizard] = None
+        self._picker: Optional[ServicePicker] = None
 
         self.root = tk.Tk()
         self.root.title('锐捷 ePorta 连接工具 v%s' % __version__)
@@ -85,9 +89,11 @@ class AppWindow:
         self.root.protocol('WM_DELETE_WINDOW', self._on_close)
         self._append_log('界面已启动，配置文件：%s' % (self.controller.config_path or '-'))
 
-        if start_hidden:
+        if start_hidden and not self.controller.needs_profile:
             self.root.withdraw()
             self.log.info('界面以隐藏方式启动（托盘常驻）')
+        elif start_hidden:
+            self.log.info('首次使用：强制显示窗口以完成账号设置')
 
         if start_watching:
             if self.controller.start_watch():
@@ -97,8 +103,12 @@ class AppWindow:
 
         self.root.after(POLL_INTERVAL_MS, self._pump)
         self.root.after(150, self.controller.refresh_status)
-        # 首次运行且尚未抓包时，自动获取参数并写回配置
-        if self.controller.needs_auto_setup():
+        # 首次运行：先让用户填写账号与服务商
+        if self.controller.needs_profile:
+            self._append_log('首次使用：请在弹出的窗口里填写学号、密码并选择服务商', 'warn')
+            self.root.after(400, self._open_setup_wizard)
+        # 已配置但尚未抓包时，自动获取参数并写回配置
+        elif self.controller.needs_auto_setup():
             self._append_log('检测到还未抓包，正在自动获取认证参数…', 'warn')
             self.root.after(600, self.controller.auto_setup)
 
@@ -158,11 +168,13 @@ class AppWindow:
         self.server_var = tk.StringVar(value=self.controller.server)
         self.user_var = tk.StringVar(value=self.controller.user_id or '-')
         self.watch_var = tk.StringVar(value='守护模式：已停止')
+        self.service_var = tk.StringVar(value=self.controller.current_service() or '(默认)')
         self.probe_var = tk.StringVar(value=summarize_probes(self.controller.daemon.probes))
 
         rows = [
             ('认证服务器', self.server_var),
             ('账号', self.user_var),
+            ('服务商', self.service_var),
             ('运行状态', self.watch_var),
             ('探测地址', self.probe_var),
         ]
@@ -309,11 +321,26 @@ class AppWindow:
         if event.kind == 'keepalive':
             # 保活探测比较频繁，不写入日志区，避免刷屏
             return
+        if event.kind == 'services':
+            callback = self.controller.take_services_callback()
+            if callback is not None:
+                try:
+                    callback(event.data.get('services') or [], event.data.get('error') or '')
+                except Exception as exc:  # pragma: no cover - 回调异常
+                    self.log.debug('服务商列表回调异常：%s', exc)
+            self._append_log(message, 'ok' if event.data.get('services') else 'warn')
+            return
+        if event.kind == 'service_rejected':
+            self._append_log(message, 'warn')
+            self._open_service_picker(event)
+            return
         self._append_log(message, tag)
 
     def _refresh_dynamic(self) -> None:
         controller = self.controller
 
+        self.user_var.set(controller.user_id or '-')
+        self.service_var.set(controller.current_service() or '(默认)')
         self.status_label.configure(text=controller.state_text())
         self.dot.itemconfigure(self.dot_item, fill=status_hex(controller.online))
         self.last_label.configure(text='最近事件：%s' % controller.last_message)
@@ -334,6 +361,80 @@ class AppWindow:
         if self.tray is not None and self.tray.available and now - self._last_tray_update >= TRAY_REFRESH_SECONDS:
             self._last_tray_update = now
             self.tray.update(online=controller.online, watching=controller.watching)
+
+    # ------------------------------------------------------------------ #
+    # 首次设置与服务商确认
+    # ------------------------------------------------------------------ #
+    def _open_setup_wizard(self) -> None:
+        """首次使用：弹窗填写学号、密码并选择服务商。"""
+
+        self.log.info('打开首次设置向导（needs_profile=%s）', self.controller.needs_profile)
+        if self._wizard is not None and self._wizard.winfo_exists():
+            if self._wizard.winfo_ismapped():
+                self._wizard.lift()
+            else:
+                self._wizard.deiconify()
+            return
+
+        from ..config import PLACEHOLDER_USER_ID
+
+        auto = self.controller.cfg.get('auto') or {}
+        raw_user_id = str(auto.get('user_id') or self.controller.user_id or '').strip()
+        if raw_user_id == PLACEHOLDER_USER_ID:
+            raw_user_id = ''
+        self._wizard = SetupWizard(
+            self.root,
+            user_id=raw_user_id,
+            password=str(auto.get('password') or ''),
+            service=self.controller.current_service(),
+            services=self.controller.service_options(),
+            on_save=self._on_profile_saved,
+            on_fetch_services=self._request_services,
+            logger=self.log,
+        )
+
+    def _on_profile_saved(self, user_id: str, password: str, service: str, options: list) -> None:
+        message = self.controller.save_profile(user_id, password, service, options)
+        self._append_log(message, 'ok' if '已保存' in message else 'error')
+        if '已保存' in message:
+            self._append_log(self.controller.reload_config())
+            self.user_var.set(self.controller.user_id or user_id)
+            self.service_var.set(self.controller.current_service() or '(默认)')
+            self.root.after(400, self._maybe_auto_setup)
+
+    def _maybe_auto_setup(self) -> None:
+        if self.controller.needs_auto_setup():
+            self._append_log('正在自动获取认证参数（需要处于未认证状态）…', 'warn')
+            self.controller.auto_setup()
+
+    def _request_services(self, done) -> None:
+        """请求后台抓取服务商列表（结果通过 services 事件回到主线程）。"""
+
+        if not self.controller.fetch_services_async(done):
+            self._append_log('已有任务在执行，请稍后再刷新服务商列表', 'warn')
+
+    def _open_service_picker(self, event) -> None:
+        """登录失败且疑似服务商不对时，弹窗让用户确认。"""
+
+        if self._picker is not None and self._picker.winfo_exists():
+            return
+
+        services = list(event.data.get('services') or []) or self.controller.service_options()
+        current = str(event.data.get('service') or self.controller.current_service() or '')
+        self._picker = ServicePicker(
+            self.root,
+            current=current,
+            services=services,
+            reason=str(event.message or ''),
+            on_confirm=self._on_service_confirmed,
+            on_fetch_services=self._request_services,
+            logger=self.log,
+        )
+
+    def _on_service_confirmed(self, service: str) -> None:
+        message = self.controller.apply_service(service)
+        self._append_log(message, 'ok' if '已改为' in message else 'error')
+        self.service_var.set(service or '(默认)')
 
     # ------------------------------------------------------------------ #
     # 动作

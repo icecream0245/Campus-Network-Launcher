@@ -23,12 +23,14 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from .. import autostart
+from .. import config as config_module
 from ..daemon import (
     EVENT_KEEPALIVE,
     EVENT_LOGIN_FAIL,
     EVENT_LOGIN_OK,
     EVENT_LOGOUT_FAIL,
     EVENT_LOGOUT_OK,
+    EVENT_SERVICE_REJECTED,
     EVENT_STATE,
     EVENT_WATCH_STARTED,
     EVENT_WATCH_STOPPED,
@@ -80,6 +82,7 @@ class AppController:
         self.online_detail = ''
         self.last_message = '就绪'
         self.failures = 0
+        self._pending_services_done: Optional[Callable[[List[str], str], None]] = None
 
         notify_cfg = cfg.get('notify', {})
         self.notifier = Notifier(
@@ -174,6 +177,8 @@ class AppController:
                 self.last_message = '守护模式已停止'
             elif event == EVENT_KEEPALIVE:
                 self.last_message = '保活探测完成'
+            elif event == EVENT_SERVICE_REJECTED:
+                self.last_message = '疑似服务商不正确：%s' % (payload.get('message') or '')
 
         # payload 里可能自带 message 字段，需要与 _post 的形参区分开
         data = dict(payload)
@@ -282,6 +287,133 @@ class AppController:
             self.stop_watch()
         else:
             self.start_watch()
+
+    # ------------------------------------------------------------------ #
+    # 首次设置向导
+    # ------------------------------------------------------------------ #
+    @property
+    def needs_profile(self) -> bool:
+        """配置里是否还没有账号信息（需要弹首次设置向导）。"""
+
+        return bool(self.cfg.get('_needs_profile'))
+
+    def current_service(self) -> str:
+        return str((self.cfg.get('auto') or {}).get('service') or '').strip()
+
+    def service_options(self) -> List[str]:
+        """可选服务商列表：优先用配置里缓存的，否则用内置兜底。"""
+
+        auto = self.cfg.get('auto') or {}
+        options = [str(item).strip() for item in (auto.get('service_options') or []) if str(item or '').strip()]
+        if options:
+            return options
+        from .dialogs import FALLBACK_SERVICES
+
+        return list(FALLBACK_SERVICES)
+
+    def _remember_service_options(self, services: List[str]) -> None:
+        auto = self.cfg.setdefault('auto', {})
+        cleaned = [str(item).strip() for item in (services or []) if str(item or '').strip()]
+        if cleaned:
+            auto['service_options'] = cleaned
+
+    def fetch_services_async(self, done: Callable[[List[str], str], None]) -> bool:
+        """后台抓取服务商列表；完成后在主线程调用 ``done(services, error)``。
+
+        实现方式：工作线程把结果投递成事件，界面在 _pump 里通过 ``poll_service_result`` 取走，
+        这里额外记录 ``done`` 回调，由界面的 _handle_event 消费。
+        """
+
+        def task() -> None:
+            from ..portal import fetch_service_options
+
+            try:
+                services, error = fetch_service_options(self.cfg, logger=self.log)
+            except Exception as exc:  # pragma: no cover - 兜底
+                services, error = [], '%s: %s' % (type(exc).__name__, exc)
+            if services:
+                self._remember_service_options(services)
+            with self._state_lock:
+                self._pending_services_done = done
+            self._post(
+                'services',
+                ('已获取 %d 个服务商' % len(services)) if services else ('获取服务商失败：%s' % error),
+                services=list(services),
+                error=error,
+            )
+
+        return self._run_worker(task, 'eporta-services')
+
+    def take_services_callback(self) -> Optional[Callable[[List[str], str], None]]:
+        """取出并清空等待中的服务商列表回调（界面收到 services 事件时调用）。"""
+
+        with self._state_lock:
+            callback = self._pending_services_done
+            self._pending_services_done = None
+        return callback
+
+    def save_profile(self, user_id: str, password: str, service: str, options: List[str]) -> str:
+        """保存首次设置填写的账号信息（含服务商），返回给用户看的提示。"""
+
+        from .. import config as config_module
+
+        fields = config_module.build_profile_fields(user_id, password, service, options)
+        try:
+            _path, backup = config_module.update_auto_fields(self.config_path, fields)
+        except config_module.ConfigError as exc:
+            self.log.error('保存账号信息失败：%s', exc)
+            return '保存失败：%s' % exc
+
+        self.cfg.setdefault('auto', {}).update(fields)
+        login_data = self.cfg.get('login_data')
+        if isinstance(login_data, dict):
+            login_data['userId'] = fields['user_id']
+        self.cfg['_needs_profile'] = False
+        self.log.info('已保存账号信息（服务商：%s）', service or '默认')
+        suffix = '，原配置已备份' if backup else ''
+        return '已保存账号信息（服务商：%s）%s' % (service or '默认', suffix)
+
+    def apply_service(self, service: str) -> str:
+        """把用户新选的服务商写入配置，并在守护中立即重试。"""
+
+        from .. import config as config_module
+
+        try:
+            _path, _backup = config_module.update_auto_fields(self.config_path, {'service': service})
+        except config_module.ConfigError as exc:
+            self.log.error('保存服务商失败：%s', exc)
+            return '保存服务商失败：%s' % exc
+
+        self.cfg.setdefault('auto', {})['service'] = str(service or '').strip()
+        was_watching = self.watching
+        if was_watching:
+            self.stop_watch()
+        self.daemon.update_service(service)
+        if was_watching:
+            self.start_watch()
+        self.log.info('服务商已切换为「%s」%s', service, '，正在重新连接' if was_watching else '')
+        return '服务商已改为「%s」%s' % (service, '，正在重新连接…' if was_watching else '，将在下次登录时生效')
+
+    def reload_config(self) -> str:
+        """重新加载配置文件并重建守护（首次设置保存后调用）。"""
+
+        from .. import config as config_module
+
+        was_watching = self.watching
+        if was_watching:
+            self.stop_watch()
+        try:
+            new_cfg = config_module.load_config(self.config_path, allow_incomplete=True)
+        except config_module.ConfigError as exc:
+            self.log.error('重新加载配置失败：%s', exc)
+            return '重新加载配置失败：%s' % exc
+
+        self.cfg = new_cfg
+        self.daemon = Daemon(new_cfg, notifier=self.notifier, logger=self.log, listener=self._on_daemon_event)
+        if was_watching:
+            self.start_watch()
+        self.log.info('配置已重新加载（需要首次设置：%s）', new_cfg.get('_needs_profile'))
+        return '配置已重新加载'
 
     # ------------------------------------------------------------------ #
     # 自动配置（首次运行自动获取参数并写回 config.yml）

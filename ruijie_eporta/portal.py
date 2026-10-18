@@ -97,6 +97,31 @@ def rsa_encrypt_raw(plaintext: str, modulus_hex: str, exponent_hex: str = '10001
     return ' '.join(blocks)
 
 
+SERVICE_ERROR_KEYWORDS = (
+    '服务商',
+    '运营商',
+    '套餐',
+    'service',
+    '不允许该服务',
+    '不支持该服务',
+    '服务不允许',
+    '服务不匹配',
+)
+
+
+def is_service_error(message: str) -> bool:
+    """判断登录失败信息是否指向「服务商/运营商」问题。
+
+    刻意不使用过于宽泛的「服务」，避免把「服务器错误」误判进来。
+    """
+
+    text = str(message or '')
+    if not text:
+        return False
+    lowered = text.lower()
+    return any(keyword.lower() in lowered for keyword in SERVICE_ERROR_KEYWORDS)
+
+
 def build_encrypted_password(password: str, mac: str, modulus_hex: str, exponent_hex: str = '10001') -> str:
     """生成登录表单里 ``password`` 字段的值。"""
 
@@ -203,6 +228,8 @@ class PortalDiscovery:
         self._opener = urllib.request.build_opener(cookie_processor)
         # 探测重定向时必须禁用自动跳转，否则读不到网关给出的 Location
         self._probe_opener = urllib.request.build_opener(_NoRedirect, cookie_processor)
+        # 最近一次 pageInfo 返回的服务商列表（供失败重试弹窗使用）
+        self.last_services: List[str] = []
 
     # ------------------------------------------------------------------ #
     def _base_headers(self, referer: str = '') -> Dict[str, str]:
@@ -371,6 +398,8 @@ class PortalDiscovery:
             return AuthResult(True, 'success', '当前已在线，无需认证')
 
         page = self.page_info(info)
+        services_map = page.get('service')
+        self.last_services = list(services_map.keys()) if isinstance(services_map, dict) else []
         chosen_service = choose_service(page, service, html)
         service_value = normalize_service(chosen_service)
         modulus = str(page.get('publicKeyModulus') or '')
@@ -493,3 +522,49 @@ class PortalDiscovery:
         result = parsed.get('result')
         message = str(parsed.get('message') or '')
         return AuthResult(result == 'success', result, message, status, parsed)
+
+# --------------------------------------------------------------------------- #
+# 服务商列表（供首次运行向导与服务商失败重试使用）
+# --------------------------------------------------------------------------- #
+def fetch_service_options(
+    cfg: Dict[str, Any],
+    *,
+    timeout: Optional[float] = None,
+    logger: Optional[logging.Logger] = None,
+) -> Tuple[List[str], str]:
+    """抓取认证页上可用的服务商名称列表。
+
+    需要处于「未认证」状态（能从网关拿到认证页）；已在线时返回空列表与原因。
+
+    Returns:
+        Tuple[List[str], str]: (服务商显示名列表, 失败原因；成功时原因为空串)
+    """
+
+    network_cfg = cfg.get('network') or {}
+    discovery = PortalDiscovery(
+        probes=network_cfg.get('probes') or network.DEFAULT_PROBES,
+        timeout=float(timeout or network_cfg.get('timeout') or 5),
+        logger=logger,
+    )
+    try:
+        location = discovery.detect_location()
+        if location is None:
+            return [], '当前已在线，无法获取服务商列表（请先断开校园网）'
+        if not location:
+            return [], '未能从网关获取认证页地址（可能不在校园网内）'
+        info = discovery.build_info(location)
+        discovery.open_portal(info)
+        page = discovery.page_info(info)
+    except Exception as exc:
+        return [], '%s: %s' % (type(exc).__name__, exc)
+
+    services = page.get('service')
+    if not isinstance(services, dict) or not services:
+        return [], '认证页没有返回服务商列表'
+
+    def sort_key(name: str) -> int:
+        item = services.get(name) or {}
+        return 0 if str(item.get('serviceDefault') or '').lower() == 'true' else 1
+
+    return sorted(str(name) for name in services.keys()), ''
+

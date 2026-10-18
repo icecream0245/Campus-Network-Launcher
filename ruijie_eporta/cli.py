@@ -251,6 +251,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     try:
         cfg = config.load_config(args.config)
+    except config.ProfileIncompleteError as exc:
+        # 首次运行：命令行模式仍然报错退出，图形界面则放宽校验后弹向导
+        if args.status or args.login or args.logout or args.auto_setup:
+            return _report_config_error(exc, args)
+        try:
+            cfg = config.load_config(args.config, allow_incomplete=True)
+        except config.ConfigError as retry_exc:
+            return _report_config_error(retry_exc, args)
     except config.ConfigError as exc:
         return _report_config_error(exc, args)
 
@@ -288,7 +296,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # 守护模式：优先"托盘常驻 + 隐藏窗口"，环境不支持时退化为纯后台
     if args.watch:
-        code = _try_gui(cfg, args, logger, start_watching=True, start_hidden=not args.no_tray)
+        # 首次运行时必须让用户看到向导窗口
+        start_hidden = (not args.no_tray) and not cfg.get('_needs_profile')
+        code = _try_gui(cfg, args, logger, start_watching=True, start_hidden=start_hidden)
         if code is not None:
             return code
         logger.info('以纯后台方式启动守护模式')
