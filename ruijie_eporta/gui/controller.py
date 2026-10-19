@@ -31,6 +31,7 @@ from ..daemon import (
     EVENT_LOGOUT_FAIL,
     EVENT_LOGOUT_OK,
     EVENT_SERVICE_REJECTED,
+    EVENT_SERVICE_SUSPECTED,
     EVENT_STATE,
     EVENT_WATCH_STARTED,
     EVENT_WATCH_STOPPED,
@@ -179,6 +180,8 @@ class AppController:
                 self.last_message = '保活探测完成'
             elif event == EVENT_SERVICE_REJECTED:
                 self.last_message = '疑似服务商不正确：%s' % (payload.get('message') or '')
+            elif event == EVENT_SERVICE_SUSPECTED:
+                self.last_message = '认证成功但网络仍不通，可能是服务商不正确'
 
         # payload 里可能自带 message 字段，需要与 _post 的形参区分开
         data = dict(payload)

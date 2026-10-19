@@ -40,6 +40,9 @@ EVENT_LOGOUT_OK = 'logout_ok'
 EVENT_LOGOUT_FAIL = 'logout_fail'
 EVENT_KEEPALIVE = 'keepalive'
 EVENT_SERVICE_REJECTED = 'service_rejected'
+EVENT_SERVICE_SUSPECTED = 'service_suspected'
+# 认证成功后多久内仍不通，才认定为疑似服务商不对（秒）
+SUSPECT_WINDOW_SECONDS = 90
 
 
 class Daemon:
@@ -109,6 +112,9 @@ class Daemon:
         # 已提示过的服务商（避免反复弹窗）与最近一次的服务商列表
         self._service_prompted: set = set()
         self._last_services: List[str] = []
+        self._service_suspected: set = set()
+        self._login_ok_at: Optional[float] = None
+        self._unreachable_after_login = 0
 
     # ------------------------------------------------------------------ #
     # 默认探测实现
@@ -195,6 +201,37 @@ class Daemon:
         self.log.info('疑似服务商不匹配（当前：%s），等待用户确认', service or '(未设置)')
         self._emit(EVENT_SERVICE_REJECTED, message=message, service=service, services=services)
 
+    def _maybe_emit_service_suspected(self) -> None:
+        """认证成功但网络仍不通，提示可能是服务商选错（同一服务商只提示一次）。
+
+        这种情况服务器通常不会报错，只是上网被限制，因此需要由程序自己发现。
+        """
+
+        if self._login_ok_at is None:
+            self._unreachable_after_login = 0
+            return
+        if (self._now() - self._login_ok_at) > SUSPECT_WINDOW_SECONDS:
+            self._unreachable_after_login = 0
+            return
+
+        self._unreachable_after_login += 1
+        if self._unreachable_after_login < 2:
+            return
+
+        service = str((self.cfg.get('auto') or {}).get('service') or '').strip()
+        if service in self._service_suspected:
+            return
+        self._service_suspected.add(service)
+        self.log.info(
+            '认证成功但网络仍不通（当前服务商：%s），提示用户检查服务商',
+            service or '(未设置)',
+        )
+        self._emit(
+            EVENT_SERVICE_SUSPECTED,
+            message='认证成功但网络仍然不通，可能是服务商选择不正确',
+            service=service,
+        )
+
     def update_service(self, service: str) -> None:
         """更新当前使用的服务商（下次登录生效），并允许再次提示。"""
 
@@ -202,6 +239,8 @@ class Daemon:
         if isinstance(auto, dict):
             auto['service'] = str(service or '').strip()
         self._service_prompted.clear()
+        self._service_suspected.clear()
+        self._unreachable_after_login = 0
         self.log.info('服务商已更新为：%s', service or '(未设置)')
 
     # ------------------------------------------------------------------ #
@@ -218,6 +257,7 @@ class Daemon:
             self.log.info('认证成功：%s', message)
             self._notifier.info('联网成功', result.message or '网络已连接！')
             self._service_prompted.clear()
+            self._login_ok_at = self._now()
             self._emit(EVENT_LOGIN_OK, message=message)
             return EXIT_OK
         message = result.error or result.message or '未知错误'
@@ -331,12 +371,16 @@ class Daemon:
                     self.log.info('网络已恢复（%s）', probe.detail)
                     self._notifier.info('网络已恢复', '设备已重新联网')
                     self.failures = 0
+                self._unreachable_after_login = 0
                 self._maybe_keepalive()
                 self._sleep(self.check_interval)
                 continue
 
             if self._stop:
                 break
+
+            # 认证成功但网络仍不通 → 可能是服务商选错（服务器不会报错）
+            self._maybe_emit_service_suspected()
 
             if self.check_school_network and not self._reach_probe():
                 self.log.info(
@@ -365,6 +409,7 @@ class Daemon:
             self.log.info('认证成功：%s', message)
             self._notifier.info('联网成功', result.message or '网络已连接！')
             self._service_prompted.clear()
+            self._login_ok_at = self._now()
             self._emit(EVENT_LOGIN_OK, message=message)
             self._sleep(self.check_interval)
             return result

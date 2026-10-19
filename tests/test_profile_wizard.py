@@ -16,7 +16,7 @@ from ruijie_eporta.daemon import Daemon
 from ruijie_eporta.eportal import AuthResult
 from ruijie_eporta.gui.controller import AppController
 from ruijie_eporta.portal import fetch_service_options, is_service_error
-from tests.conftest import FakeClient, RecordingNotifier
+from tests.conftest import FakeClient, FakeClock, RecordingNotifier, offline_probe, online_probe
 from tests.mock_portal import MockPortalServer
 
 
@@ -419,3 +419,103 @@ def test_service_picker_smoke():
         root.destroy()
 
     assert chosen['service'] == '中国移动'
+
+
+# --------------------------------------------------------------------------- #
+# v1.12：主界面切换服务商 / 认证成功但网不通的提示
+# --------------------------------------------------------------------------- #
+def test_daemon_emits_service_suspected_when_still_offline(config_factory):
+    """登录一直成功但网络始终不通时，应提示可能是服务商不对（只提示一次）。"""
+
+    cfg = config_factory(extra='daemon:\n  check_interval: 5\n')
+    events = []
+    clock = FakeClock()
+    daemon = Daemon(
+        cfg,
+        FakeClient([AuthResult(True, 'success', '')] * 6),
+        notifier=RecordingNotifier(),
+        sleep=clock.sleep,
+        now=clock.now,
+        online_probe=lambda: offline_probe(),
+        reach_probe=lambda: True,
+        listener=lambda event, payload: events.append(event),
+    )
+
+    daemon.run(max_iterations=4)
+
+    assert events.count('service_suspected') == 1
+
+
+def test_daemon_no_suspicion_when_network_ok(config_factory):
+    cfg = config_factory()
+    events = []
+    clock = FakeClock()
+    daemon = Daemon(
+        cfg,
+        FakeClient(),
+        notifier=RecordingNotifier(),
+        sleep=clock.sleep,
+        now=clock.now,
+        online_probe=lambda: online_probe(),
+        reach_probe=lambda: True,
+        listener=lambda event, payload: events.append(event),
+    )
+
+    daemon.run(max_iterations=3)
+
+    assert 'service_suspected' not in events
+
+
+def test_update_service_resets_suspicion(config_factory):
+    cfg = config_factory()
+    daemon = Daemon(cfg, FakeClient(), notifier=RecordingNotifier())
+
+    daemon._service_suspected.add('中国电信')
+    daemon.update_service('中国移动')
+
+    assert daemon._service_suspected == set()
+    assert cfg['auto']['service'] == '中国移动'
+
+
+@pytest.mark.skipif(not _can_create_window(), reason='当前环境无法创建图形窗口')
+def test_main_window_can_apply_service(tmp_path, monkeypatch):
+    """主界面下拉框 + 应用按钮：把新服务商交给控制器写入配置。"""
+
+    from ruijie_eporta.gui.app import AppWindow
+
+    cfg = minimal_cfg(tmp_path, enabled=False, user_id='2023000001', password='secret', service='中国电信')
+    Path(cfg['_config_path']).write_text('main:\n  version: 3\nauto:\n  service: 中国电信\n', encoding='utf-8')
+    controller = AppController(cfg)
+    window = AppWindow(controller, start_watching=False, start_hidden=True)
+    applied = {}
+    try:
+        def fake_apply(service):
+            applied['service'] = service
+            return '服务商已改为「%s」，正在重新连接…' % service
+
+        monkeypatch.setattr(controller, 'apply_service', fake_apply)
+        window.service_var.set('中国移动')
+        window._on_apply_service()
+        log_text = window.log_text.get('1.0', 'end')
+    finally:
+        window.quit()
+
+    assert applied.get('service') == '中国移动'
+    assert '已改为' in log_text
+
+
+@pytest.mark.skipif(not _can_create_window(), reason='当前环境无法创建图形窗口')
+def test_main_window_service_combo_has_options(tmp_path):
+    """主界面应带一个可编辑的服务商下拉框。"""
+
+    from ruijie_eporta.gui.app import AppWindow
+
+    cfg = minimal_cfg(tmp_path)
+    controller = AppController(cfg)
+    window = AppWindow(controller, start_watching=False, start_hidden=True)
+    try:
+        values = list(window.service_combo['values'])
+        assert values  # 至少有内置兜底
+        assert '中国电信' in values
+    finally:
+        window.quit()

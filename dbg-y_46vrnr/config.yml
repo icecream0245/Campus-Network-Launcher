@@ -1,0 +1,31 @@
+main:
+  version: 3
+
+funtion:
+  check_school_network: true
+  disconnect_network: true
+
+url:
+  server: http://127.0.0.1:9
+  login: /eportal/InterFace.do?method=login
+  logout: /eportal/InterFace.do?method=logout
+
+cookie: 'EPORTAL_COOKIE_USERNAME=2023000001; JSESSIONID=TEST'
+
+login_data:
+  userId: '2023000001'
+  password: '0123456789abcdef'
+  service: '%E4%B8%AD%E5%9B%BD%E7%94%B5%E4%BF%A1'
+  queryString: 'wlanuserip%3D1%26wlanacname%3D2'
+  operatorPwd:
+  operatorUserId:
+  validcode:
+  passwordEncrypt: true
+
+logout_data:
+
+headers:
+  Referer: http://127.0.0.1:9/eportal/index.jsp
+daemon:
+  check_interval: 5
+

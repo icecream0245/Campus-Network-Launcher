@@ -48,6 +48,7 @@ TAG_COLORS = {
 EVENT_TAGS = {
     'auto_setup_ok': 'ok',
     'service_rejected': 'warn',
+    'service_suspected': 'warn',
     'login_ok': 'ok',
     'logout_ok': 'ok',
     'login_fail': 'error',
@@ -77,6 +78,7 @@ class AppWindow:
         self._last_tray_update = 0.0
         self._wizard: Optional[SetupWizard] = None
         self._picker: Optional[ServicePicker] = None
+        self._last_synced_service = ''
 
         self.root = tk.Tk()
         self.root.title('锐捷 ePorta 连接工具 v%s' % __version__)
@@ -174,15 +176,35 @@ class AppWindow:
         rows = [
             ('认证服务器', self.server_var),
             ('账号', self.user_var),
-            ('服务商', self.service_var),
             ('运行状态', self.watch_var),
-            ('探测地址', self.probe_var),
         ]
         for index, (label, var) in enumerate(rows):
             ttk.Label(panel, text=label + '：', style='Key.TLabel').grid(row=index, column=0, sticky='nw', pady=1)
             ttk.Label(panel, textvariable=var, style='Info.TLabel', wraplength=520, justify='left').grid(
                 row=index, column=1, sticky='w', pady=1
             )
+
+        # 服务商：可直接下拉切换并立即应用（连错运营商时用得上）
+        ttk.Label(panel, text='服务商：', style='Key.TLabel').grid(row=3, column=0, sticky='nw', pady=1)
+        service_row = ttk.Frame(panel)
+        service_row.grid(row=3, column=1, sticky='w', pady=1)
+        self.service_combo = ttk.Combobox(
+            service_row,
+            textvariable=self.service_var,
+            width=20,
+            values=self.controller.service_options(),
+            font=(FONT_FAMILY, 9),
+        )
+        self.service_combo.pack(side='left')
+        self.apply_service_btn = ttk.Button(
+            service_row, text='应用', width=6, command=self._on_apply_service
+        )
+        self.apply_service_btn.pack(side='left', padx=(6, 0))
+
+        ttk.Label(panel, text='探测地址：', style='Key.TLabel').grid(row=4, column=0, sticky='nw', pady=1)
+        ttk.Label(panel, textvariable=self.probe_var, style='Info.TLabel', wraplength=520, justify='left').grid(
+            row=4, column=1, sticky='w', pady=1
+        )
 
     def _build_actions(self) -> None:
         panel = ttk.Frame(self.root, padding=(16, 4, 16, 8))
@@ -334,13 +356,22 @@ class AppWindow:
             self._append_log(message, 'warn')
             self._open_service_picker(event)
             return
+        if event.kind == 'service_suspected':
+            self._append_log(message, 'warn')
+            self._append_log('如果一直上不了网，请在上方「服务商」下拉框里换一个，然后点「应用」', 'warn')
+            return
         self._append_log(message, tag)
 
     def _refresh_dynamic(self) -> None:
         controller = self.controller
 
         self.user_var.set(controller.user_id or '-')
-        self.service_var.set(controller.current_service() or '(默认)')
+        # 只在配置里的服务商真的变化时同步下拉框，避免覆盖用户正在编辑的值
+        service_text = controller.current_service() or '(默认)'
+        if service_text != self._last_synced_service:
+            self._last_synced_service = service_text
+            self.service_var.set(service_text)
+            self.service_combo['values'] = controller.service_options()
         self.status_label.configure(text=controller.state_text())
         self.dot.itemconfigure(self.dot_item, fill=status_hex(controller.online))
         self.last_label.configure(text='最近事件：%s' % controller.last_message)
@@ -454,6 +485,22 @@ class AppWindow:
     def _on_refresh(self) -> None:
         if not self.controller.refresh_status():
             self._append_log('已有任务在执行，请稍候…', 'warn')
+
+    def _on_apply_service(self) -> None:
+        """把界面上选中的服务商写入配置并立即重试。"""
+
+        service = self.service_var.get().strip()
+        if not service:
+            self._append_log('请先选择或填写服务商', 'warn')
+            return
+        if service == self.controller.current_service():
+            self._append_log('服务商没有变化：%s' % service)
+            return
+        message = self.controller.apply_service(service)
+        self._append_log(message, 'ok' if '已改为' in message else 'error')
+        if '已改为' in message:
+            self._last_synced_service = service
+            self.service_combo['values'] = self.controller.service_options()
 
     def _on_toggle_watch(self) -> None:
         if self.controller.watching:
