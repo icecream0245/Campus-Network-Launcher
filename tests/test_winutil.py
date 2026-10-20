@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from ruijie_eporta import winutil
+from campus_network_launcher import winutil
 
 
 @pytest.fixture

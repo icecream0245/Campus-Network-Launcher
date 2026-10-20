@@ -18,7 +18,7 @@ from . import winutil
 
 log = logging.getLogger(__name__)
 
-APP_TITLE = '锐捷 ePorta 连接工具'
+APP_TITLE = 'Campus Network Launcher'
 # 借用 PowerShell 已注册的 AppID，无需安装/注册自己的快捷方式即可显示通知
 TOAST_APP_ID = r'{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
 

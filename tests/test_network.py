@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from ruijie_eporta import network
+from campus_network_launcher import network
 from tests.mock_eportal import MockEportalServer
 
 

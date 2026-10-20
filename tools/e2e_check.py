@@ -90,7 +90,7 @@ def cli_command(args, config_path: str):
 
     if CLI_EXE:
         return [CLI_EXE, '--config', config_path] + args
-    return [sys.executable, '-m', 'ruijie_eporta', '--config', config_path] + args
+    return [sys.executable, '-m', 'campus_network_launcher', '--config', config_path] + args
 
 
 def run_cli(args, config_path: str, timeout: float = 60.0):
@@ -180,7 +180,7 @@ def main() -> int:
 
         print('\n[5] 检查日志文件')
         log_root = os.path.dirname(CLI_EXE) if CLI_EXE else ROOT
-        log_path = os.path.join(log_root, 'logs', 'ruijie-eporta.log')
+        log_path = os.path.join(log_root, 'logs', 'campus-network-launcher.log')
         check(os.path.isfile(log_path), '日志文件已生成：%s' % log_path)
         if os.path.isfile(log_path):
             with open(log_path, 'r', encoding='utf-8', errors='replace') as fp:

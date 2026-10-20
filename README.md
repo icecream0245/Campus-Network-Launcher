@@ -1,4 +1,4 @@
-# Ruijie-ePorta-Tool（本地迭代版 v1.8.0）
+# Campus Network Launcher（本地迭代版 v2.0.0）
 
 基于 [Redlnn/Ruijie-ePorta-Tool](https://github.com/Redlnn/Ruijie-ePorta-Tool) v1.6 的**本地迭代分支**。
 
@@ -45,29 +45,29 @@
 | 依赖管理 | poetry，Python `>=3.9,<3.11` | 标准 `pyproject.toml` + `requirements.txt`，Python `>=3.9` |
 | 出错处理 | 直接抛异常退出 | 非 JSON / HTTP 错误 / 超时均给出明确提示并记录日志 |
 | 可测试性 | 无 | mock ePortal 服务器 + 95 项 pytest + 端到端自检脚本 |
-| 日志 | 无 | `logs/ruijie-eporta.log`，自动轮转，日志中不含密码 |
+| 日志 | 无 | `logs/campus-network-launcher.log`，自动轮转，日志中不含密码 |
 
 ## 快速开始
 
 ### 方式一：图形界面（推荐）
 
-把 `Ruijie_ePorta_Tool.exe` 和你的 `config.yml` 放在**同一个目录**，双击运行：
+把 `Campus Network Launcher.exe` 和你的 `config.yml` 放在**同一个目录**，双击运行：
 界面打开并**自动开始守护**（可在界面上随时停止）。
 
 ### 方式二：托盘后台（开机自启使用的就是它）
 
 ```powershell
-.\Ruijie_ePorta_Tool.exe --watch --quiet      # 无窗口，仅托盘图标 + 守护
-.\Ruijie_ePorta_Tool.exe --install-autostart  # 装机自启（默认就是 --watch --quiet）
+.\Campus Network Launcher.exe --watch --quiet      # 无窗口，仅托盘图标 + 守护
+.\Campus Network Launcher.exe --install-autostart  # 装机自启（默认就是 --watch --quiet）
 ```
 
 ### 方式三：命令行
 
 ```powershell
-.\Ruijie_ePorta_Tool.exe --once        # 旧版行为：检查校园网 → 已联网询问是否断网 → 未联网则登录
-.\Ruijie_ePorta_Tool.exe --login       # 只登录一次
-.\Ruijie_ePorta_Tool.exe --logout      # 只断网一次
-.\Ruijie_ePorta_Tool.exe --status      # 输出状态 JSON（建议用 Console 版）
+.\Campus Network Launcher.exe --once        # 旧版行为：检查校园网 → 已联网询问是否断网 → 未联网则登录
+.\Campus Network Launcher.exe --login       # 只登录一次
+.\Campus Network Launcher.exe --logout      # 只断网一次
+.\Campus Network Launcher.exe --status      # 输出状态 JSON（建议用 Console 版）
 ```
 
 ### 方式四：从源码运行
@@ -75,14 +75,14 @@
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m ruijie_eporta            # 打开界面
-.\.venv\Scripts\python.exe -m ruijie_eporta --watch    # 托盘后台守护
+.\.venv\Scripts\python.exe -m campus_network_launcher            # 打开界面
+.\.venv\Scripts\python.exe -m campus_network_launcher --watch    # 托盘后台守护
 ```
 
 ## 命令行用法
 
 ```text
-Ruijie_ePorta_Tool.exe [选项]
+Campus Network Launcher.exe [选项]
 ```
 
 | 选项 | 说明 |
@@ -141,7 +141,7 @@ auto:
 想让探测到的参数落到 `config.yml` 里（便于查看、备份，或发给自己另一台电脑），可以执行：
 
 ```powershell
-Ruijie_ePorta_Tool.exe --auto-setup
+Campus Network Launcher.exe --auto-setup
 ```
 
 也可以在界面上点「**自动获取参数**」按钮。它会访问学校认证页，把认证服务器、cookie、
@@ -151,6 +151,18 @@ Ruijie_ePorta_Tool.exe --auto-setup
 
 > 首次运行时，若 `auto.enabled: true` 且还没有抓包参数，程序会自动完成这一步。
 > 这些参数与本机 IP/MAC 绑定，换网络环境后重新执行一次即可。
+
+### 刷新服务商列表
+
+主界面「服务商」一行右侧有「刷新」按钮：
+
+- 未认证时直接抓取认证页上的服务商列表；
+- **已认证（在线）时也能刷新**——会用配置里保存的认证页地址再访问一次；
+- 刷新失败不会清空当前列表，也会提示原因，下拉框仍可手动输入。
+
+> 如果你们学校的列表里没有"教师免费/学生免费"，那说明当前网络只下发那几个选项，
+> 属于正常现象，可以手动输入名称。
+
 
 ### 服务商选错了怎么办
 
@@ -211,7 +223,7 @@ daemon:
   cooldown: 180
   login_timeout: 10
   probe_timeout: 3
-  log_file: ''              # 留空 = 程序目录 logs/ruijie-eporta.log
+  log_file: ''              # 留空 = 程序目录 logs/campus-network-launcher.log
   log_max_bytes: 1048576
   log_backup_count: 3
 network:
@@ -235,8 +247,8 @@ autostart:
 ## 开机自启
 
 ```powershell
-.\Ruijie_ePorta_Tool.exe --install-autostart     # 安装（默认写入启动目录快捷方式）
-.\Ruijie_ePorta_Tool.exe --remove-autostart      # 卸载
+.\Campus Network Launcher.exe --install-autostart     # 安装（默认写入启动目录快捷方式）
+.\Campus Network Launcher.exe --remove-autostart      # 卸载
 ```
 
 也可以在界面里直接勾选/取消「开机自启」。
@@ -254,7 +266,7 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
 脚本会自动：创建 `.venv` → 安装依赖 → 运行测试 → 用 PyInstaller 打包，
-产物在 `dist\` 目录（`Ruijie_ePorta_Tool.exe` 与 `Ruijie_ePorta_Tool_Console.exe`）。
+产物在 `dist\` 目录（`Campus Network Launcher.exe` 与 `Campus Network Launcher Console.exe`）。
 
 常用参数：`-Clean`（先清理）、`-SkipTests`、`-SkipInstall`。也可以直接双击 `build.bat`。
 
@@ -271,7 +283,7 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 .\.venv\Scripts\python.exe tools\e2e_check.py
 
 # 也可以直接验证打包产物（需用 Console 版才能看到 --status 输出）
-.\.venv\Scripts\python.exe tools\e2e_check.py --exe .\dist\Ruijie_ePorta_Tool_Console.exe
+.\.venv\Scripts\python.exe tools\e2e_check.py --exe .\dist\Campus Network Launcher Console.exe
 ```
 
 ## 已知问题

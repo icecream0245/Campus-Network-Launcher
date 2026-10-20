@@ -14,9 +14,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from ruijie_eporta import config  # noqa: E402
-from ruijie_eporta.eportal import AuthResult  # noqa: E402
-from ruijie_eporta.network import ProbeResult  # noqa: E402
+from campus_network_launcher import config  # noqa: E402
+from campus_network_launcher.eportal import AuthResult  # noqa: E402
+from campus_network_launcher.network import ProbeResult  # noqa: E402
 
 # 与用户正在使用的 v3 配置结构一致（值已脱敏）
 BASE_CONFIG_TEMPLATE = '''\

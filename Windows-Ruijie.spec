@@ -13,9 +13,9 @@
     pyinstaller --noconfirm --clean Windows-Ruijie.spec
 """
 
-APP_NAME = 'Ruijie_ePorta_Tool'
+APP_NAME = 'Campus Network Launcher'
 VERSION_FILE = 'version.txt'
-ICON = 'ruijie_eporta/assets/wangluo.ico'
+ICON = 'campus_network_launcher/assets/wangluo.ico'
 
 # 明确排除用不到的重量级/无关模块，减小体积
 # 注意：不要排除 tkinter / _tkinter，界面需要它们
@@ -48,7 +48,7 @@ a = Analysis(
     ['main.py'],
     pathex=['.'],
     binaries=[],
-    datas=[(ICON, 'ruijie_eporta/assets')],
+    datas=[(ICON, 'campus_network_launcher/assets')],
     hiddenimports=[
         # pystray 在运行期按平台动态选择后端，需要显式声明
         'pystray._win32',
@@ -102,7 +102,7 @@ exe_console = EXE(
     a.binaries,
     a.datas,
     [],
-    name=APP_NAME + '_Console',
+    name=APP_NAME + ' Console',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

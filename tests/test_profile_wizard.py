@@ -11,11 +11,11 @@ from pathlib import Path
 import pytest
 import yaml
 
-from ruijie_eporta import config
-from ruijie_eporta.daemon import Daemon
-from ruijie_eporta.eportal import AuthResult
-from ruijie_eporta.gui.controller import AppController
-from ruijie_eporta.portal import fetch_service_options, is_service_error
+from campus_network_launcher import config
+from campus_network_launcher.daemon import Daemon
+from campus_network_launcher.eportal import AuthResult
+from campus_network_launcher.gui.controller import AppController
+from campus_network_launcher.portal import fetch_service_options, is_service_error
 from tests.conftest import FakeClient, FakeClock, RecordingNotifier, offline_probe, online_probe
 from tests.mock_portal import MockPortalServer
 
@@ -193,9 +193,9 @@ def test_fetch_service_options(portal):
     services, error = fetch_service_options(cfg)
 
     assert error == ''
-    assert services[0] == 'default'  # 默认项排在最前
-    assert '中国电信' in services
-    assert '中国移动' in services
+    assert services[0] == '教师免费'  # 默认项排在最前（显示名）
+    assert '中国电信（宿舍）' in services
+    assert '中国移动（宿舍）' in services
 
 
 def test_fetch_service_options_when_online(portal):
@@ -344,7 +344,7 @@ def _can_create_window() -> bool:
 
 @pytest.mark.skipif(not _can_create_window(), reason='当前环境无法创建图形窗口')
 def test_setup_wizard_smoke():
-    from ruijie_eporta.gui.dialogs import SetupWizard
+    from campus_network_launcher.gui.dialogs import SetupWizard
 
     root = tk.Tk()
     root.withdraw()
@@ -377,7 +377,7 @@ def test_setup_wizard_smoke():
 def test_setup_wizard_requires_fields():
     from tkinter import messagebox
 
-    from ruijie_eporta.gui.dialogs import SetupWizard
+    from campus_network_launcher.gui.dialogs import SetupWizard
 
     root = tk.Tk()
     root.withdraw()
@@ -399,7 +399,7 @@ def test_setup_wizard_requires_fields():
 
 @pytest.mark.skipif(not _can_create_window(), reason='当前环境无法创建图形窗口')
 def test_service_picker_smoke():
-    from ruijie_eporta.gui.dialogs import ServicePicker
+    from campus_network_launcher.gui.dialogs import ServicePicker
 
     root = tk.Tk()
     root.withdraw()
@@ -481,7 +481,7 @@ def test_update_service_resets_suspicion(config_factory):
 def test_main_window_can_apply_service(tmp_path, monkeypatch):
     """主界面下拉框 + 应用按钮：把新服务商交给控制器写入配置。"""
 
-    from ruijie_eporta.gui.app import AppWindow
+    from campus_network_launcher.gui.app import AppWindow
 
     cfg = minimal_cfg(tmp_path, enabled=False, user_id='2023000001', password='secret', service='中国电信')
     Path(cfg['_config_path']).write_text('main:\n  version: 3\nauto:\n  service: 中国电信\n', encoding='utf-8')
@@ -508,7 +508,7 @@ def test_main_window_can_apply_service(tmp_path, monkeypatch):
 def test_main_window_service_combo_has_options(tmp_path):
     """主界面应带一个可编辑的服务商下拉框。"""
 
-    from ruijie_eporta.gui.app import AppWindow
+    from campus_network_launcher.gui.app import AppWindow
 
     cfg = minimal_cfg(tmp_path)
     controller = AppController(cfg)
@@ -519,3 +519,85 @@ def test_main_window_service_combo_has_options(tmp_path):
         assert '中国电信' in values
     finally:
         window.quit()
+
+
+# --------------------------------------------------------------------------- #
+# v2.0.0：在线刷新服务商、主界面刷新按钮、署名
+# --------------------------------------------------------------------------- #
+def test_portal_url_from_config_variants():
+    from campus_network_launcher.portal import _portal_url_from_config
+
+    assert _portal_url_from_config(
+        {'headers': {'Referer': 'http://a/eportal/index.jsp?x=1'}}
+    ) == 'http://a/eportal/index.jsp?x=1'
+    assert _portal_url_from_config(
+        {'url': {'server': 'http://a/'}, 'login_data': {'queryString': 'wlanuserip%3D1'}}
+    ) == 'http://a/eportal/index.jsp?wlanuserip%3D1'
+    assert _portal_url_from_config({}) == ''
+
+
+def test_fetch_service_options_when_online_uses_config(portal):
+    """已在线时用配置里的认证页地址也能刷新服务商列表。"""
+
+    portal.state.online = True
+    portal_url = portal.base_url + '/eportal/index.jsp?wlanuserip=1.2.3.4&wlanacname=mock'
+    cfg = {
+        'network': {'probes': [portal.base_url + '/generate_204'], 'timeout': 3},
+        'headers': {'Referer': portal_url},
+        'login_data': {'queryString': 'wlanuserip%3D1.2.3.4'},
+    }
+
+    services, error = fetch_service_options(cfg)
+
+    assert error == ''
+    assert any('中国电信' in item for item in services)
+
+
+@pytest.mark.skipif(not _can_create_window(), reason='当前环境无法创建图形窗口')
+def test_main_window_refresh_services(tmp_path, monkeypatch):
+    from campus_network_launcher.gui.app import AppWindow
+
+    cfg = minimal_cfg(tmp_path)
+    controller = AppController(cfg)
+    window = AppWindow(controller, start_watching=False, start_hidden=True)
+    called = {}
+    try:
+        monkeypatch.setattr(
+            controller,
+            'fetch_services_async',
+            lambda done: called.setdefault('done', done) or True,
+        )
+        window._on_refresh_services()
+        assert 'done' in called
+
+        window._on_services_refreshed(['教师免费', '中国电信'], '')
+        values = list(window.service_combo['values'])
+        log_ok = window.log_text.get('1.0', 'end')
+
+        window._on_services_refreshed([], '网络不可达')
+        values_after = list(window.service_combo['values'])
+        log_fail = window.log_text.get('1.0', 'end')
+    finally:
+        window.quit()
+
+    assert values == ['教师免费', '中国电信']
+    assert '已刷新服务商列表' in log_ok
+    assert values_after == ['教师免费', '中国电信']  # 失败时不清空旧列表
+    assert '刷新服务商列表失败' in log_fail
+
+
+@pytest.mark.skipif(not _can_create_window(), reason='当前环境无法创建图形窗口')
+def test_window_title_and_credit(tmp_path):
+    from campus_network_launcher.gui.app import AppWindow
+
+    cfg = minimal_cfg(tmp_path)
+    window = AppWindow(AppController(cfg), start_watching=False, start_hidden=True)
+    try:
+        title = window.root.title()
+        credit = window.credit_label.cget('text')
+    finally:
+        window.quit()
+
+    assert title.startswith('Campus Network Launcher v')
+    assert 'by:Xiaowu' in title
+    assert credit == 'by:Xiaowu'

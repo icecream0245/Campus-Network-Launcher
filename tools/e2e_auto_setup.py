@@ -61,7 +61,7 @@ def main() -> int:
         env = os.environ.copy()
         env['PYTHONIOENCODING'] = 'utf-8'
         completed = subprocess.run(
-            [sys.executable, '-m', 'ruijie_eporta', '--config', config_path, '--auto-setup', '--quiet', '--allow-multiple'],
+            [sys.executable, '-m', 'campus_network_launcher', '--config', config_path, '--auto-setup', '--quiet', '--allow-multiple'],
             cwd=ROOT,
             env=env,
             capture_output=True,
@@ -101,7 +101,7 @@ def main() -> int:
         with open(config_path, 'w', encoding='utf-8') as fp:
             yaml.safe_dump(data, fp, allow_unicode=True, sort_keys=False)
         completed = subprocess.run(
-            [sys.executable, '-m', 'ruijie_eporta', '--config', config_path, '--login', '--quiet', '--allow-multiple'],
+            [sys.executable, '-m', 'campus_network_launcher', '--config', config_path, '--login', '--quiet', '--allow-multiple'],
             cwd=ROOT,
             env=env,
             capture_output=True,

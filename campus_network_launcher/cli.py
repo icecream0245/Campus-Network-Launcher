@@ -17,7 +17,7 @@ from .notify import Notifier
 
 log = logging.getLogger(__name__)
 
-PROG = 'Ruijie_ePorta_Tool'
+PROG = 'Campus Network Launcher'
 DESCRIPTION = '锐捷 ePortal 校园网自动登录工具 v%s（本地迭代版，含可视化界面）' % __version__
 
 
@@ -267,7 +267,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     logger.info('%s v%s 启动（配置文件：%s）', PROG, __version__, cfg.get('_config_path'))
 
     if not args.allow_multiple and not args.status:
-        if not winutil.acquire_single_instance('ruijie_eporta_tool'):
+        if not winutil.acquire_single_instance('campus_network_launcher_tool'):
             logger.warning('检测到已有实例在运行，本次退出')
             notifier.warn(
                 '程序已在运行',
@@ -277,7 +277,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
             return EXIT_OK
 
-    daemon = Daemon(cfg, notifier=notifier, logger=logging.getLogger('ruijie_eporta.daemon'))
+    daemon = Daemon(cfg, notifier=notifier, logger=logging.getLogger('campus_network_launcher.daemon'))
 
     if args.auto_setup:
         return _run_auto_setup(cfg, logger, args)

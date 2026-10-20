@@ -18,7 +18,7 @@ log = logging.getLogger(__name__)
 FONT_FAMILY = 'Microsoft YaHei UI'
 
 # 抓不到真实列表时的兜底（锐捷 ePortal 常见运营商）
-FALLBACK_SERVICES = ('中国电信', '中国移动', '中国联通')
+FALLBACK_SERVICES = ('教师免费', '学生免费', '中国电信', '中国移动', '中国联通')
 
 # on_save(user_id, password, service, options)
 ProfileCallback = Callable[[str, str, str, List[str]], None]
@@ -59,7 +59,7 @@ class SetupWizard(tk.Toplevel):
         self._fetch_cb = on_fetch_services
         self.result: Optional[tuple] = None
 
-        self.title('首次使用设置 - 锐捷 ePorta 连接工具')
+        self.title('首次使用设置 - Campus Network Launcher')
         self.resizable(False, False)
         self.transient(master)
         self.protocol('WM_DELETE_WINDOW', self._on_cancel)
@@ -213,7 +213,7 @@ class ServicePicker(tk.Toplevel):
         self._fetch_cb = on_fetch_services
         self.result: Optional[str] = None
 
-        self.title('确认服务商 - 锐捷 ePorta 连接工具')
+        self.title('确认服务商 - Campus Network Launcher')
         self.resizable(False, False)
         self.transient(master)
         self.protocol('WM_DELETE_WINDOW', self._on_cancel)

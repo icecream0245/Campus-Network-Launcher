@@ -8,6 +8,6 @@
 
 from __future__ import annotations
 
-__version__ = '1.12.0'
+__version__ = '2.0.0'
 __upstream_version__ = '1.6'
 __all__ = ['__version__', '__upstream_version__']

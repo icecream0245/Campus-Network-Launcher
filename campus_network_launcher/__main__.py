@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""支持 ``python -m ruijie_eporta`` 方式运行。"""
+"""支持 ``python -m campus_network_launcher`` 方式运行。"""
 
 from __future__ import annotations
 

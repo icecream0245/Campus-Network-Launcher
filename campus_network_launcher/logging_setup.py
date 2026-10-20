@@ -18,8 +18,8 @@ from . import config
 
 LOG_FORMAT = '%(asctime)s %(levelname)-7s [%(name)s] %(message)s'
 DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
-LOGGER_NAME = 'ruijie_eporta'
-DEFAULT_LOG_NAME = 'ruijie-eporta.log'
+LOGGER_NAME = 'campus_network_launcher'
+DEFAULT_LOG_NAME = 'campus-network-launcher.log'
 
 
 def default_log_path() -> str:
@@ -81,7 +81,7 @@ def setup_logging(
 
 
 def get_logger(name: Optional[str] = None) -> logging.Logger:
-    """获取子 logger，统一挂在 ``ruijie_eporta`` 命名空间下。"""
+    """获取子 logger，统一挂在 ``campus_network_launcher`` 命名空间下。"""
 
     if not name or name == LOGGER_NAME:
         return logging.getLogger(LOGGER_NAME)

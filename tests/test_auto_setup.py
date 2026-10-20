@@ -11,9 +11,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-from ruijie_eporta import config
-from ruijie_eporta.gui.controller import AppController
-from ruijie_eporta.portal import PortalDiscovery
+from campus_network_launcher import config
+from campus_network_launcher.gui.controller import AppController
+from campus_network_launcher.portal import PortalDiscovery
 from tests.mock_portal import MockPortalServer
 
 
@@ -159,7 +159,7 @@ def test_saved_config_can_be_reloaded_by_program(portal, tmp_path):
     config.save_config(target, cfg, header=config.discovered_header(discovered))
 
     loaded = config.load_config(target)
-    from ruijie_eporta.eportal import EportalClient
+    from campus_network_launcher.eportal import EportalClient
 
     result = EportalClient(loaded).login()
 

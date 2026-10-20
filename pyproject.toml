@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ruijie-eporta-tool"
-version = "1.12.0"
-description = "锐捷 ePortal 校园网自动登录工具：可视化界面、系统托盘、守护模式、掉线自动重连、开机自启（上游 Redlnn/Ruijie-ePorta-Tool 的本地迭代版）"
+name = "campus-network-launcher"
+version = "2.0.0"
+description = "Campus Network Launcher：校园网自动登录工具（基于锐捷 ePortal 认证协议），含可视化界面、系统托盘、守护模式、掉线自动重连、开机自启（上游 Redlnn/Ruijie-ePorta-Tool 的本地迭代版）"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "AGPL-3.0-only" }
@@ -35,14 +35,14 @@ dev = ["pytest>=7.0", "pyinstaller>=6.0", "black>=24.0"]
 Upstream = "https://github.com/Redlnn/Ruijie-ePorta-Tool"
 
 [project.scripts]
-ruijie-eporta = "ruijie_eporta.cli:main"
+campus-network-launcher = "campus_network_launcher.cli:main"
 
 [tool.setuptools]
-packages = ["ruijie_eporta"]
+packages = ["campus_network_launcher"]
 include-package-data = true
 
 [tool.setuptools.package-data]
-ruijie_eporta = ["assets/*.ico"]
+campus_network_launcher = ["assets/*.ico"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -42,7 +42,7 @@ _MUTEX_HANDLES: List[int] = []
 
 def message_box(
     text: str,
-    title: str = '锐捷 ePorta 连接工具',
+    title: str = 'Campus Network Launcher',
     flags: int = MB_OK | MB_ICONINFORMATION,
 ) -> int:
     """弹出原生消息框；非 Windows 平台直接返回 IDOK 并写日志。"""
@@ -57,13 +57,13 @@ def message_box(
         return IDOK
 
 
-def ask_yes_no(text: str, title: str = '锐捷 ePorta 连接工具') -> bool:
+def ask_yes_no(text: str, title: str = 'Campus Network Launcher') -> bool:
     """询问式对话框，返回用户是否选择"是"。"""
 
     return message_box(text, title, MB_YESNO | MB_ICONQUESTION) == IDYES
 
 
-def acquire_single_instance(name: str = 'ruijie_eporta_tool') -> bool:
+def acquire_single_instance(name: str = 'campus_network_launcher_tool') -> bool:
     """获取单实例锁。
 
     Returns:

@@ -85,7 +85,7 @@ daemon:
   cooldown: 180 # 触发冷却时至少等待的秒数
   login_timeout: 10 # 认证请求超时（秒）
   probe_timeout: 3 # 网络探测超时（秒）
-  log_file: '' # 日志文件路径，留空 = 程序目录下 logs/ruijie-eporta.log
+  log_file: '' # 日志文件路径，留空 = 程序目录下 logs/campus-network-launcher.log
   log_max_bytes: 1048576 # 单个日志文件大小上限（字节）
   log_backup_count: 3 # 保留的历史日志份数
 

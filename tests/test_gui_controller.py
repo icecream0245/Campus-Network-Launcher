@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from ruijie_eporta.gui.controller import AppController, summarize_probes
+from campus_network_launcher.gui.controller import AppController, summarize_probes
 from tests.mock_eportal import MockEportalServer
 
 

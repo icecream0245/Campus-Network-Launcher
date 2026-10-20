@@ -8,7 +8,7 @@ import urllib.parse
 
 import pytest
 
-from ruijie_eporta.portal import (
+from campus_network_launcher.portal import (
     AutoLoginError,
     PortalDiscovery,
     build_encrypted_password,

@@ -526,6 +526,24 @@ class PortalDiscovery:
 # --------------------------------------------------------------------------- #
 # 服务商列表（供首次运行向导与服务商失败重试使用）
 # --------------------------------------------------------------------------- #
+def _portal_url_from_config(cfg: Dict[str, Any]) -> str:
+    """从配置里恢复认证页地址（已在线时用于刷新服务商列表）。"""
+
+    headers = cfg.get('headers') or {}
+    referer = str(headers.get('Referer') or '').strip()
+    if referer:
+        return referer
+
+    login_data = cfg.get('login_data') or {}
+    query = str(login_data.get('queryString') or '').strip()
+    if not query:
+        return ''
+    server = str((cfg.get('url') or {}).get('server') or '').strip().rstrip('/')
+    if not server:
+        return ''
+    return '%s/eportal/index.jsp?%s' % (server, query)
+
+
 def fetch_service_options(
     cfg: Dict[str, Any],
     *,
@@ -549,7 +567,10 @@ def fetch_service_options(
     try:
         location = discovery.detect_location()
         if location is None:
-            return [], '当前已在线，无法获取服务商列表（请先断开校园网）'
+            # 已在线：认证页通常仍可访问，用配置里保存的地址再试一次
+            location = _portal_url_from_config(cfg)
+            if not location:
+                return [], '当前已在线，且配置里没有保存认证页地址，请先断开校园网后刷新'
         if not location:
             return [], '未能从网关获取认证页地址（可能不在校园网内）'
         info = discovery.build_info(location)
@@ -562,9 +583,13 @@ def fetch_service_options(
     if not isinstance(services, dict) or not services:
         return [], '认证页没有返回服务商列表'
 
-    def sort_key(name: str) -> int:
-        item = services.get(name) or {}
-        return 0 if str(item.get('serviceDefault') or '').lower() == 'true' else 1
+    entries = []
+    for key, item in services.items():
+        data = item if isinstance(item, dict) else {}
+        show = str(data.get('serviceShowName') or data.get('serviceName') or key).strip()
+        is_default = str(data.get('serviceDefault') or '').lower() == 'true'
+        entries.append((show or str(key), is_default))
 
-    return sorted(str(name) for name in services.keys()), ''
+    entries.sort(key=lambda pair: 0 if pair[1] else 1)
+    return [show for show, _default in entries], ''
 

@@ -7,8 +7,8 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, List, Optional
 
-from ruijie_eporta.daemon import EXIT_AUTH_FAILED, EXIT_OK, Daemon
-from ruijie_eporta.eportal import AuthResult
+from campus_network_launcher.daemon import EXIT_AUTH_FAILED, EXIT_OK, Daemon
+from campus_network_launcher.eportal import AuthResult
 from tests.conftest import FakeClient, FakeClock, RecordingNotifier, offline_probe, online_probe
 
 

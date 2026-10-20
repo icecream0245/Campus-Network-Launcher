@@ -21,8 +21,8 @@ from . import config, winutil
 
 log = logging.getLogger(__name__)
 
-APP_NAME = 'Ruijie_ePorta_Tool'
-SHORTCUT_NAME = 'Ruijie ePorta Tool.lnk'
+APP_NAME = 'Campus Network Launcher'
+SHORTCUT_NAME = 'Campus Network Launcher.lnk'
 RUN_KEY = r'Software\Microsoft\Windows\CurrentVersion\Run'
 DEFAULT_ARGS = '--watch --quiet'
 
@@ -50,7 +50,7 @@ def launch_target(args: str = DEFAULT_ARGS) -> Tuple[str, str, str]:
     if getattr(sys, 'frozen', False):
         target = os.path.abspath(sys.executable)
         return target, args, os.path.dirname(target)
-    return _pythonw(), ('-m ruijie_eporta %s' % args).strip(), config.program_dir()
+    return _pythonw(), ('-m campus_network_launcher %s' % args).strip(), config.program_dir()
 
 
 def _ps_quote(text: str) -> str:

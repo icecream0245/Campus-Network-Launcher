@@ -27,7 +27,7 @@ from .controller import AppController
 
 log = logging.getLogger(__name__)
 
-APP_TITLE = '锐捷 ePorta 连接工具'
+APP_TITLE = 'Campus Network Launcher'
 
 # 状态颜色（RGBA）
 COLOR_ONLINE = (46, 160, 67, 255)
@@ -128,7 +128,7 @@ class TrayIcon:
 
         try:
             self._icon = pystray.Icon(
-                'ruijie_eporta_tool',
+                'campus_network_launcher_tool',
                 build_status_image(self.controller.online),
                 self.tooltip(),
                 menu=self._build_menu(pystray),

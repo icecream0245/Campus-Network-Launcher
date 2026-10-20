@@ -2,6 +2,37 @@
 
 本文件记录本地迭代分支（基于上游 `Redlnn/Ruijie-ePorta-Tool` v1.6）的改动。
 
+## [2.0.0] - 本地迭代版
+
+### 改名：Campus Network Launcher
+
+- 软件更名为 **Campus Network Launcher**（此前本地迭代版沿用上游名 Ruijie-ePorta-Tool）。
+- 可执行文件、快捷方式、开机自启项、命令行入口、Python 包名、日志文件名全部随之更新：
+  `Campus Network Launcher.exe`、`Campus Network Launcher Console.exe`、
+  `Campus Network Launcher.lnk`、`campus_network_launcher`、`campus-network-launcher.log`。
+- 旧的可执行文件名与旧快捷方式不再使用；`config.yml` 保持兼容，无需修改。
+- 程序名里的"锐捷 ePortal"仅用于说明认证协议，软件本身叫 Campus Network Launcher。
+
+### 新增：主界面刷新服务商
+
+- 主界面服务商行新增「刷新」按钮：随时重新抓取服务商列表。
+- **已在线时也能刷新**：自动用配置里保存的认证页地址访问（认证页在已认证状态通常仍可访问）。
+- 刷新失败时保留原列表并提示原因；下拉框仍可手动输入其它服务商名。
+
+### 新增：署名
+
+- 窗口标题栏版本号后显示 `by:Xiaowu`。
+- 主界面右下角显示 `by:Xiaowu`。
+
+### 调整
+
+- 抓不到真实服务商列表时的内置兜底增加「教师免费」「学生免费」（真实列表仍以认证页为准）。
+
+### 验证
+
+- 测试增至 **192 项**，改名后全部通过。
+- 在真实校园网环境完成在线测试：在线刷新服务商、切换服务商、断网后自动重连。
+
 ## [1.12.0] - 本地迭代版
 
 ### 新增：主界面直接切换服务商
@@ -187,13 +218,13 @@
   支持「启动目录快捷方式」（默认，无需管理员）与「注册表 Run 项」两种方式。
 - **命令行接口**：`--watch`、`--login`、`--logout`、`--status`、`--yes`/`--no`、`--quiet`、
   `--no-toast`、`--dialog`、`--config`、`--log-file`、`--verbose`、`--allow-multiple`、`--iterations`。
-- **日志**：默认写入程序目录 `logs/ruijie-eporta.log`，自动轮转（1 MiB × 3 份），日志中不记录密码。
+- **日志**：默认写入程序目录 `logs/campus-network-launcher.log`，自动轮转（1 MiB × 3 份），日志中不记录密码。
 - **离线测试体系**：内置模拟 ePortal 服务器（`tests/mock_eportal.py`）+ 50 余条 pytest 用例，
   覆盖配置兼容性、认证接口、重连状态机、退避策略与自启逻辑。
 
 ### 变更
 
-- **重构为 `ruijie_eporta` 包**：拆分为 `config` / `network` / `eportal` / `daemon` / `notify` /
+- **重构为 `campus_network_launcher` 包**：拆分为 `config` / `network` / `eportal` / `daemon` / `notify` /
   `autostart` / `logging_setup` / `winutil` / `cli`，核心逻辑不再与界面耦合。
 - **移除 `tinyWinToast` 依赖**：Toast 通知改为内置实现（PowerShell 调用 WinRT），
   不再需要从 GitHub 安装 git 依赖。
@@ -206,8 +237,8 @@
 - **认证接口更健壮**：非 JSON 响应、HTTP 错误码、超时、连接失败都会给出明确错误信息，
   不会像上游那样直接抛异常退出。
 - **`--logout` 语义修正**：优先使用配置中的 `logout_data`，为空时回退到 `login_data`（兼容上游行为）。
-- **同时构建两个可执行文件**：`Ruijie_ePorta_Tool.exe`（无控制台）与
-  `Ruijie_ePorta_Tool_Console.exe`（有控制台，便于排查）。
+- **同时构建两个可执行文件**：`Campus Network Launcher.exe`（无控制台）与
+  `Campus Network Launcher Console.exe`（有控制台，便于排查）。
 
 ### 兼容性
 

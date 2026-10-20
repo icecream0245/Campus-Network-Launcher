@@ -6,20 +6,20 @@ from __future__ import annotations
 
 import os
 
-from ruijie_eporta import autostart, config
+from campus_network_launcher import autostart, config
 
 
 def test_launch_target_in_dev_mode():
     target, arguments, workdir = autostart.launch_target('--watch --quiet')
 
     assert os.path.basename(target).lower() in ('pythonw.exe', 'python.exe')
-    assert arguments == '-m ruijie_eporta --watch --quiet'
+    assert arguments == '-m campus_network_launcher --watch --quiet'
     assert workdir == config.program_dir()
 
 
 def test_launch_target_without_args():
     _target, arguments, _workdir = autostart.launch_target('')
-    assert arguments == '-m ruijie_eporta'
+    assert arguments == '-m campus_network_launcher'
 
 
 def test_ps_quote_escapes_single_quotes():

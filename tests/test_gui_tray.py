@@ -6,8 +6,8 @@ from __future__ import annotations
 
 import sys
 
-from ruijie_eporta.gui.controller import AppController
-from ruijie_eporta.gui.tray import (
+from campus_network_launcher.gui.controller import AppController
+from campus_network_launcher.gui.tray import (
     COLOR_OFFLINE,
     COLOR_ONLINE,
     COLOR_UNKNOWN,
@@ -54,7 +54,7 @@ def test_tooltip_text(config_factory):
     tray = TrayIcon(controller)
 
     text = tray.tooltip()
-    assert '锐捷' in text
+    assert 'Campus Network Launcher' in text
     assert '状态' in text
     assert '守护' in text
 
@@ -62,6 +62,6 @@ def test_tooltip_text(config_factory):
 def test_message_filter_patch_is_safe():
     """受限环境兼容补丁不应抛异常（返回状态字符串即可）。"""
 
-    from ruijie_eporta.gui.tray import patch_message_filter
+    from campus_network_launcher.gui.tray import patch_message_filter
 
     assert patch_message_filter() in ('patched', 'no-attribute', 'unavailable')

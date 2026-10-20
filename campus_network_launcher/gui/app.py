@@ -81,7 +81,7 @@ class AppWindow:
         self._last_synced_service = ''
 
         self.root = tk.Tk()
-        self.root.title('锐捷 ePorta 连接工具 v%s' % __version__)
+        self.root.title('Campus Network Launcher v%s - by:Xiaowu' % __version__)
         self.root.minsize(620, 520)
         self._apply_icon()
         self._build_style()
@@ -200,6 +200,10 @@ class AppWindow:
             service_row, text='应用', width=6, command=self._on_apply_service
         )
         self.apply_service_btn.pack(side='left', padx=(6, 0))
+        self.refresh_services_btn = ttk.Button(
+            service_row, text='刷新', width=6, command=self._on_refresh_services
+        )
+        self.refresh_services_btn.pack(side='left', padx=(6, 0))
 
         ttk.Label(panel, text='探测地址：', style='Key.TLabel').grid(row=4, column=0, sticky='nw', pady=1)
         ttk.Label(panel, textvariable=self.probe_var, style='Info.TLabel', wraplength=520, justify='left').grid(
@@ -269,9 +273,18 @@ class AppWindow:
             self.log_text.tag_configure(tag, foreground=color)
 
     def _build_statusbar(self) -> None:
-        self.statusbar = ttk.Label(self.root, text='', style='Hint.TLabel', anchor='w', padding=(16, 2, 16, 8))
-        self.statusbar.grid(row=4, column=0, sticky='ew')
+        bar = ttk.Frame(self.root, padding=(16, 2, 16, 8))
+        bar.grid(row=4, column=0, sticky='ew')
+        bar.columnconfigure(0, weight=1)
+
+        self.statusbar = ttk.Label(bar, text='', style='Hint.TLabel', anchor='w')
+        self.statusbar.grid(row=0, column=0, sticky='ew')
         self.statusbar.configure(text='日志：%s' % self.controller.log_file_path())
+
+        self.credit_label = ttk.Label(
+            bar, text='by:Xiaowu', style='Hint.TLabel', anchor='e', foreground='#9a9a9a'
+        )
+        self.credit_label.grid(row=0, column=1, sticky='e', padx=(12, 0))
 
     def _center(self, width: int, height: int) -> None:
         self.root.update_idletasks()
@@ -350,7 +363,8 @@ class AppWindow:
                     callback(event.data.get('services') or [], event.data.get('error') or '')
                 except Exception as exc:  # pragma: no cover - 回调异常
                     self.log.debug('服务商列表回调异常：%s', exc)
-            self._append_log(message, 'ok' if event.data.get('services') else 'warn')
+            else:
+                self._append_log(message, 'ok' if event.data.get('services') else 'warn')
             return
         if event.kind == 'service_rejected':
             self._append_log(message, 'warn')
@@ -501,6 +515,25 @@ class AppWindow:
         if '已改为' in message:
             self._last_synced_service = service
             self.service_combo['values'] = self.controller.service_options()
+
+    def _on_refresh_services(self) -> None:
+        """重新抓取服务商列表（已在线时也能刷）。"""
+
+        self._append_log('正在刷新服务商列表…')
+        self._request_services(self._on_services_refreshed)
+
+    def _on_services_refreshed(self, services, error: str = '') -> None:
+        cleaned = [str(item).strip() for item in (services or []) if str(item or '').strip()]
+        if cleaned:
+            self.service_combo['values'] = cleaned
+            if not self.service_var.get().strip():
+                self.service_var.set(cleaned[0])
+            self._append_log(
+                '已刷新服务商列表（%d 个）：%s' % (len(cleaned), '、'.join(cleaned[:8])),
+                'ok',
+            )
+        else:
+            self._append_log('刷新服务商列表失败：%s（可以直接手动填写）' % (error or '未知原因'), 'warn')
 
     def _on_toggle_watch(self) -> None:
         if self.controller.watching:

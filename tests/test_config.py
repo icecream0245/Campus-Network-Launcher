@@ -8,7 +8,7 @@ import os
 
 import pytest
 
-from ruijie_eporta import config
+from campus_network_launcher import config
 from tests.conftest import write_config_file
 
 

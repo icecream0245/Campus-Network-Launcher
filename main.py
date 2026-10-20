@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import sys
 
-from ruijie_eporta.cli import main
+from campus_network_launcher.cli import main
 
 if __name__ == '__main__':
     sys.exit(main())

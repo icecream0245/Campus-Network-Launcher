@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import yaml  # noqa: E402
 
-from ruijie_eporta.portal import PortalDiscovery, build_encrypted_password  # noqa: E402
+from campus_network_launcher.portal import PortalDiscovery, build_encrypted_password  # noqa: E402
 
 
 def main() -> int:

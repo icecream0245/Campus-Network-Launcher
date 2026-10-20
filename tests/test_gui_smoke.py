@@ -26,15 +26,15 @@ pytestmark = pytest.mark.skipif(not _can_create_window(), reason='当前环境�
 
 
 def test_window_smoke(config_factory):
-    from ruijie_eporta.gui.app import AppWindow
-    from ruijie_eporta.gui.controller import AppController
+    from campus_network_launcher.gui.app import AppWindow
+    from campus_network_launcher.gui.controller import AppController
 
     cfg = config_factory(extra='notify:\n  toast: false\n')
     controller = AppController(cfg)
     window = AppWindow(controller, start_watching=False, start_hidden=True)
 
     try:
-        assert window.root.title().startswith('锐捷 ePorta 连接工具')
+        assert window.root.title().startswith('Campus Network Launcher')
         window._append_log('测试日志', 'ok')
         window._refresh_dynamic()
         assert window.watch_btn.cget('text') == '开始守护'
@@ -52,8 +52,8 @@ def test_window_smoke(config_factory):
 
 
 def test_window_start_watching_flag(config_factory):
-    from ruijie_eporta.gui.app import AppWindow
-    from ruijie_eporta.gui.controller import AppController
+    from campus_network_launcher.gui.app import AppWindow
+    from campus_network_launcher.gui.controller import AppController
 
     cfg = config_factory(extra='notify:\n  toast: false\n')
     controller = AppController(cfg)
@@ -73,7 +73,7 @@ def test_window_start_watching_flag(config_factory):
 
 
 def test_gui_available_helper():
-    from ruijie_eporta.gui.app import gui_available
+    from campus_network_launcher.gui.app import gui_available
 
     assert gui_available() is True
 
@@ -81,9 +81,9 @@ def test_gui_available_helper():
 def test_open_config_reports_notepad_fallback(config_factory, monkeypatch):
     """点击「配置文件」时必须有明确反馈（系统未关联 .yml 也要能打开）。"""
 
-    from ruijie_eporta.gui import app as app_module
-    from ruijie_eporta.gui.app import AppWindow
-    from ruijie_eporta.gui.controller import AppController
+    from campus_network_launcher.gui import app as app_module
+    from campus_network_launcher.gui.app import AppWindow
+    from campus_network_launcher.gui.controller import AppController
 
     cfg = config_factory(extra='notify:\n  toast: false\n')
     controller = AppController(cfg)
@@ -100,8 +100,8 @@ def test_open_config_reports_notepad_fallback(config_factory, monkeypatch):
 
 
 def test_open_config_missing_path_is_reported(config_factory, monkeypatch):
-    from ruijie_eporta.gui.app import AppWindow
-    from ruijie_eporta.gui.controller import AppController
+    from campus_network_launcher.gui.app import AppWindow
+    from campus_network_launcher.gui.controller import AppController
 
     cfg = config_factory(extra='notify:\n  toast: false\n')
     controller = AppController(cfg)
