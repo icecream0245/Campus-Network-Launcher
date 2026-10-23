@@ -69,7 +69,9 @@ class SetupWizard(tk.Toplevel):
         self.password_var = tk.StringVar(value=password)
         self.service_var = tk.StringVar(value=(service or options[0]).strip())
         self.show_password_var = tk.BooleanVar(value=False)
-        self.hint_var = tk.StringVar(value='')
+        self.hint_var = tk.StringVar(
+            value='点「一键执行」会保存配置、自动重启程序并完成认证（可能需要短暂断网）'
+        )
 
         self._build(options)
         _center_on(master, self, 480, 300)
@@ -124,7 +126,7 @@ class SetupWizard(tk.Toplevel):
 
         buttons = ttk.Frame(self, padding=(18, 0, 18, 14))
         buttons.pack(fill='x')
-        ttk.Button(buttons, text='保存并继续', width=14, command=self._on_confirm).pack(side='right')
+        ttk.Button(buttons, text='一键执行', width=14, command=self._on_confirm).pack(side='right')
         ttk.Button(buttons, text='稍后', width=10, command=self._on_cancel).pack(side='right', padx=(0, 8))
 
     # ------------------------------------------------------------------ #

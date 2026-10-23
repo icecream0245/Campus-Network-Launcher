@@ -17,6 +17,8 @@ import re
 import shutil
 import sys
 import time
+
+from . import winutil
 from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
@@ -109,6 +111,10 @@ autostart:
   method: startup # startup = 启动目录快捷方式；registry = 注册表 Run 项
   args: --watch --quiet # 自启时附加的命令行参数
 
+# 系统设置
+system:
+  suppress_portal_popup: false # 屏蔽 Windows 开机时自动弹出的认证页浏览器（需管理员，重启生效）
+
 # ==================== 免抓包模式（可选，强烈推荐） ====================
 # 打开后只需要填学号与密码：程序会自行访问认证页，自动获取
 # wlanuserip / mac / 公钥 等参数，无需再用浏览器抓包。
@@ -116,7 +122,7 @@ autostart:
 auto:
   enabled: false # 改成 true 即启用免抓包模式
   user_id: '' # 你的学号（留空则使用 login_data.userId）
-  password: '' # 你的密码（明文，仅本机保存，请注意不要泄露本文件）
+  password: '' # 你的密码（自动用 Windows DPAPI 加密保存；换电脑/用户后需重新填写）
   service: '' # 运营商/服务名，留空则自动使用认证页里的第一项
   service_options: [] # 上次获取到的可选服务商（程序自动维护，可不填）
 # 想把这些参数固化进配置文件（等价于自动抓包），可运行：--auto-setup
@@ -161,6 +167,9 @@ DEFAULT_OPTIONS: Dict[str, Any] = {
         'password': '',
         'service': '',
         'service_options': [],
+    },
+    'system': {
+        'suppress_portal_popup': False,
     },
 }
 
@@ -248,7 +257,7 @@ def save_config(
         except OSError as exc:
             raise ConfigError('备份原配置失败（%s）：%s' % (target, exc)) from exc
 
-    text = render_config_text(cfg, header=header)
+    text = render_config_text(_public_config(cfg), header=header)
     temp_path = target + '.tmp'
     try:
         with open(temp_path, 'w', encoding='utf-8') as fp:
@@ -344,6 +353,8 @@ def update_auto_fields(path: str, fields: Dict[str, Any], *, backup: bool = True
         text = fp.read()
 
     updates = {key: value for key, value in (fields or {}).items() if key in AUTO_FIELD_ORDER}
+    if 'password' in updates:
+        updates['password'] = winutil.dpapi_protect(str(updates['password'] or ''))
     if not updates:
         raise ConfigError('没有需要写入的 auto 字段')
 
@@ -588,6 +599,81 @@ def _normalize_options(cfg: Dict[str, Any]) -> None:
         str(item).strip() for item in (raw_options or []) if str(item or '').strip()
     ]
 
+    system = cfg.get('system')
+    if not isinstance(system, dict):
+        cfg['system'] = system = {}
+    system['suppress_portal_popup'] = _as_bool(system.get('suppress_portal_popup'), False)
+
+
+# --------------------------------------------------------------------------- #
+# 密码加密（Windows DPAPI）与迁移
+# --------------------------------------------------------------------------- #
+def _public_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """生成用于写盘的配置副本：去掉内部标记，并加密 auto.password。"""
+
+    clone = {key: copy.deepcopy(value) for key, value in cfg.items() if not str(key).startswith('_')}
+    auto = clone.get('auto')
+    if isinstance(auto, dict):
+        password = str(auto.get('password') or '')
+        if password:
+            auto['password'] = winutil.dpapi_protect(password)
+    return clone
+
+
+def _decrypt_password(cfg: Dict[str, Any]) -> None:
+    """把配置里的 dpapi 密码还原到内存；解密失败则清空并标记。"""
+
+    auto = cfg.get('auto')
+    if not isinstance(auto, dict):
+        return
+    token = str(auto.get('password') or '')
+    if not token or not token.startswith(winutil.DPAPI_PREFIX):
+        return
+    plain = winutil.dpapi_unprotect(token)
+    if plain:
+        auto['password'] = plain
+        return
+    auto['password'] = ''
+    cfg['_password_lost'] = True
+    log.warning('配置文件里的密码无法解密（可能换了 Windows 用户或电脑），已清空，请重新填写')
+
+
+def _raw_password_token(path: str) -> str:
+    """直接读文件里的原始密码字段（不经过解密）。"""
+
+    try:
+        with open(path, 'r', encoding='utf-8') as fp:
+            raw = yaml.safe_load(fp)
+    except Exception:
+        return ''
+    if not isinstance(raw, dict):
+        return ''
+    auto = raw.get('auto') or {}
+    if not isinstance(auto, dict):
+        return ''
+    return str(auto.get('password') or '')
+
+
+def migrate_plain_password(path: str) -> bool:
+    """把配置文件里的明文密码迁移为 DPAPI 密文。返回是否发生迁移。"""
+
+    target = os.path.abspath(path)
+    if not os.path.isfile(target):
+        return False
+    token = _raw_password_token(target)
+    if not token or token.startswith(winutil.DPAPI_PREFIX):
+        return False
+    if not winutil.dpapi_available():
+        log.warning('DPAPI 不可用，密码暂以明文保存')
+        return False
+    try:
+        update_auto_fields(target, {'password': token})
+    except ConfigError as exc:
+        log.warning('迁移明文密码失败：%s', exc)
+        return False
+    log.info('已把配置文件里的明文密码加密保存（Windows DPAPI）')
+    return True
+
 
 def _validate_version(cfg: Dict[str, Any]) -> None:
     main = cfg.get('main') or {}
@@ -699,6 +785,7 @@ def load_config(
     cfg['url']['server'] = server.rstrip('/')
 
     _normalize_options(cfg)
+    _decrypt_password(cfg)
     if allow_incomplete:
         cfg['_needs_profile'] = is_profile_incomplete(cfg)
     else:

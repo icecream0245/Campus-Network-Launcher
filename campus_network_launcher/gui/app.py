@@ -47,6 +47,8 @@ TAG_COLORS = {
 
 EVENT_TAGS = {
     'auto_setup_ok': 'ok',
+    'bootstrap_ok': 'ok',
+    'bootstrap_fail': 'error',
     'service_rejected': 'warn',
     'service_suspected': 'warn',
     'login_ok': 'ok',
@@ -69,6 +71,7 @@ class AppWindow:
         logger: Optional[logging.Logger] = None,
         start_watching: bool = True,
         start_hidden: bool = False,
+        bootstrap_on_start: bool = False,
     ) -> None:
         self.controller = controller
         self.tray = tray
@@ -109,6 +112,10 @@ class AppWindow:
         if self.controller.needs_profile:
             self._append_log('首次使用：请在弹出的窗口里填写学号、密码并选择服务商', 'warn')
             self.root.after(400, self._open_setup_wizard)
+        # 保存配置后重启进入：自动完成一键配置
+        elif bootstrap_on_start:
+            self._append_log('程序已重启，正在自动完成认证配置…', 'warn')
+            self.root.after(800, self.controller.bootstrap_first_run)
         # 已配置但尚未抓包时，自动获取参数并写回配置
         elif self.controller.needs_auto_setup():
             self._append_log('检测到还未抓包，正在自动获取认证参数…', 'warn')
@@ -239,11 +246,20 @@ class AppWindow:
         )
         self.autostart_check.grid(row=1, column=1, sticky='w', padx=(0, 8), pady=3)
 
+        self.suppress_var = tk.BooleanVar(value=self.controller.suppress_portal_popup_enabled())
+        self.suppress_check = ttk.Checkbutton(
+            panel,
+            text='屏蔽开机弹窗',
+            variable=self.suppress_var,
+            command=self._on_toggle_suppress_popup,
+        )
+        self.suppress_check.grid(row=1, column=2, sticky='w', padx=(0, 8), pady=3)
+
         ttk.Button(panel, text='打开日志', width=12, command=self._on_open_log).grid(
-            row=1, column=2, padx=(0, 8), pady=3
+            row=2, column=0, padx=(0, 8), pady=3
         )
         ttk.Button(panel, text='配置文件', width=12, command=self._on_open_config).grid(
-            row=1, column=3, padx=(0, 8), pady=3
+            row=2, column=1, padx=(0, 8), pady=3
         )
 
     def _build_log_panel(self) -> None:
@@ -442,15 +458,73 @@ class AppWindow:
         message = self.controller.save_profile(user_id, password, service, options)
         self._append_log(message, 'ok' if '已保存' in message else 'error')
         if '已保存' in message:
-            self._append_log(self.controller.reload_config())
             self.user_var.set(self.controller.user_id or user_id)
             self.service_var.set(self.controller.current_service() or '(默认)')
-            self.root.after(400, self._maybe_auto_setup)
+            self.root.after(200, self._restart_and_bootstrap)
 
     def _maybe_auto_setup(self) -> None:
         if self.controller.needs_auto_setup():
             self._append_log('正在自动获取认证参数（需要处于未认证状态）…', 'warn')
             self.controller.auto_setup()
+
+    def _on_toggle_suppress_popup(self) -> None:
+        """屏蔽/恢复 Windows 开机自动弹出的认证页浏览器。"""
+
+        want = bool(self.suppress_var.get())
+        if want:
+            confirmed = winutil.ask_yes_no(
+                '屏蔽后 Windows 不再自动弹出认证页浏览器，\n'
+                '但任务栏可能显示"无 Internet"（网络实际可用），需要重启电脑生效。\n\n'
+                '确定要屏蔽吗？',
+                '屏蔽开机认证弹窗',
+            )
+            if not confirmed:
+                self.suppress_var.set(False)
+                return
+
+        self.root.configure(cursor='watch')
+        self.root.update_idletasks()
+        try:
+            ok, message = self.controller.set_suppress_portal_popup(want)
+        finally:
+            self.root.configure(cursor='')
+
+        self._append_log(message, 'ok' if ok else 'warn')
+        if not ok:
+            self.suppress_var.set(not want)
+        self.suppress_var.set(self.controller.suppress_portal_popup_enabled())
+
+    def _restart_and_bootstrap(self) -> None:
+        """保存配置后重启程序，由新进程自动完成一键配置。"""
+
+        import subprocess
+        import sys as _sys
+
+        self._append_log('配置已保存，正在重启程序并自动完成认证…')
+        try:
+            self.root.update_idletasks()
+        except tk.TclError:  # pragma: no cover
+            pass
+
+        if getattr(_sys, 'frozen', False):
+            command = [_sys.executable, '--bootstrap']
+            workdir = os.path.dirname(_sys.executable)
+        else:
+            command = [_sys.executable, '-m', 'campus_network_launcher', '--bootstrap']
+            workdir = os.path.dirname(os.path.abspath(self.controller.config_path or os.getcwd()))
+        if self.controller.config_path:
+            command.extend(['--config', self.controller.config_path])
+
+        try:
+            self.controller.shutdown()
+            subprocess.Popen(command, cwd=workdir or None)
+        except Exception as exc:
+            self._append_log(
+                '自动重启失败：%s\n请手动关闭后重新打开程序，重启后会自动完成认证。' % exc,
+                'error',
+            )
+            return
+        self.quit()
 
     def _request_services(self, done) -> None:
         """请求后台抓取服务商列表（结果通过 services 事件回到主线程）。"""
@@ -637,6 +711,7 @@ def run_gui(
     logger: Optional[logging.Logger] = None,
     start_watching: bool = True,
     start_hidden: bool = False,
+    bootstrap_on_start: bool = False,
     enable_tray: bool = True,
 ) -> int:
     """启动图形界面；返回进程退出码。"""
@@ -655,6 +730,7 @@ def run_gui(
         logger=logger,
         start_watching=start_watching,
         start_hidden=start_hidden,
+        bootstrap_on_start=bootstrap_on_start,
     )
     try:
         window.run()

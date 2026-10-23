@@ -254,3 +254,157 @@ def open_path(path: str, *, prefer_text_editor: bool = False) -> str:
             log.warning('用记事本打开 %s 失败：%s', target, exc)
 
     return _reveal_in_explorer(target)
+
+
+# --------------------------------------------------------------------------- #
+# 密码保护：Windows DPAPI（与当前 Windows 用户绑定）
+# --------------------------------------------------------------------------- #
+DPAPI_PREFIX = 'dpapi:'
+
+
+class _DATA_BLOB(ctypes.Structure):
+    _fields_ = [('cbData', ctypes.c_uint32), ('pbData', ctypes.POINTER(ctypes.c_char))]
+
+
+def _dpapi_crypt(data: bytes, *, protect: bool) -> Optional[bytes]:
+    """调用 CryptProtectData / CryptUnprotectData；失败返回 None。"""
+
+    if not IS_WINDOWS:
+        return None
+    try:
+        crypt32 = ctypes.windll.crypt32
+        kernel32 = ctypes.windll.kernel32
+
+        buffer_in = ctypes.create_string_buffer(data, len(data))
+        blob_in = _DATA_BLOB(len(data), ctypes.cast(buffer_in, ctypes.POINTER(ctypes.c_char)))
+        blob_out = _DATA_BLOB()
+
+        if protect:
+            ok = crypt32.CryptProtectData(
+                ctypes.byref(blob_in), 'campus-network-launcher', None, None, None, 0, ctypes.byref(blob_out)
+            )
+        else:
+            ok = crypt32.CryptUnprotectData(
+                ctypes.byref(blob_in), None, None, None, None, 0, ctypes.byref(blob_out)
+            )
+        if not ok:
+            return None
+        try:
+            return ctypes.string_at(blob_out.pbData, blob_out.cbData)
+        finally:
+            kernel32.LocalFree(blob_out.pbData)
+    except Exception as exc:  # pragma: no cover - 极端环境
+        log.debug('DPAPI 调用失败：%s', exc)
+        return None
+
+
+def dpapi_available() -> bool:
+    """当前环境能否使用 DPAPI（会做一次加解密往返验证）。"""
+
+    probe = b'campus-network-launcher-probe'
+    encrypted = _dpapi_crypt(probe, protect=True)
+    if not encrypted:
+        return False
+    return _dpapi_crypt(encrypted, protect=False) == probe
+
+
+def dpapi_protect(plain: str) -> str:
+    """加密文本，返回 ``dpapi:<base64>``；不可用或失败时原样返回（并记录警告）。"""
+
+    import base64
+
+    text = str(plain or '')
+    if not text or text.startswith(DPAPI_PREFIX):
+        return text
+    encrypted = _dpapi_crypt(text.encode('utf-8'), protect=True)
+    if not encrypted:
+        log.warning('DPAPI 不可用，密码只能以明文保存')
+        return text
+    return DPAPI_PREFIX + base64.b64encode(encrypted).decode('ascii')
+
+
+def dpapi_unprotect(token: str) -> str:
+    """还原 ``dpapi:<base64>``；非该前缀原样返回（兼容旧明文）。失败返回空串。"""
+
+    import base64
+
+    text = str(token or '')
+    if not text.startswith(DPAPI_PREFIX):
+        return text
+    try:
+        raw = base64.b64decode(text[len(DPAPI_PREFIX):])
+    except Exception:
+        return ''
+    plain = _dpapi_crypt(raw, protect=False)
+    if plain is None:
+        log.warning('DPAPI 解密失败（可能换了 Windows 用户或电脑）')
+        return ''
+    try:
+        return plain.decode('utf-8')
+    except UnicodeDecodeError:
+        return ''
+
+
+# --------------------------------------------------------------------------- #
+# 系统设置：NCSI 主动探测（决定 Windows 是否自动弹出认证页浏览器）
+# --------------------------------------------------------------------------- #
+NCSI_REG_PATH = r'SYSTEM\CurrentControlSet\Services\NlaSvc\Parameters\Internet'
+NCSI_VALUE = 'EnableActiveProbing'
+
+
+def active_probing_enabled() -> Optional[bool]:
+    """读取 NCSI 主动探测是否启用；读不到返回 None。"""
+
+    if not IS_WINDOWS:
+        return None
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, NCSI_REG_PATH) as key:
+            value, _kind = winreg.QueryValueEx(key, NCSI_VALUE)
+        return bool(int(value))
+    except FileNotFoundError:
+        return True  # 键不存在时 Windows 默认启用
+    except Exception as exc:  # pragma: no cover
+        log.debug('读取 NCSI 设置失败：%s', exc)
+        return None
+
+
+def set_active_probing(enabled: bool) -> Tuple[bool, str]:
+    """提权修改 NCSI 主动探测开关。
+
+    Args:
+        enabled: True 表示恢复（启用探测）；False 表示屏蔽（禁止探测、不再自动弹浏览器）。
+
+    Returns:
+        Tuple[bool, str]: (是否成功, 给用户看的说明)
+    """
+
+    if not IS_WINDOWS:
+        return False, '仅支持 Windows'
+
+    if enabled:
+        command = 'reg delete "HKLM\\%s" /v %s /f' % (NCSI_REG_PATH, NCSI_VALUE)
+        action = '已恢复开机认证弹窗'
+    else:
+        command = 'reg add "HKLM\\%s" /v %s /t REG_DWORD /d 0 /f' % (NCSI_REG_PATH, NCSI_VALUE)
+        action = '已屏蔽开机认证弹窗'
+
+    try:
+        result = ctypes.windll.shell32.ShellExecuteW(None, 'runas', 'cmd.exe', '/c ' + command, None, 0)
+    except Exception as exc:  # pragma: no cover
+        return False, '调用管理员权限失败：%s' % exc
+
+    if int(result) <= 32:
+        return False, '未能获取管理员权限（UAC 被取消）。可手动执行：%s' % command
+
+    import time
+
+    expected = bool(enabled)
+    for _attempt in range(12):
+        time.sleep(0.6)
+        current = active_probing_enabled()
+        if current is expected:
+            return True, '%s（重启电脑后生效）' % action
+    return False, '未能确认修改结果（可能取消了 UAC）。可手动执行：%s' % command
+

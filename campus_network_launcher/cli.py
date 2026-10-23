@@ -53,6 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--dialog', action='store_true', help='额外弹出消息框提示')
     parser.add_argument('--verbose', '-v', action='store_true', help='输出调试日志')
     parser.add_argument('--allow-multiple', action='store_true', help='允许同时运行多个实例')
+    parser.add_argument('--bootstrap', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--log-file', metavar='PATH', help='指定日志文件路径')
     parser.add_argument('--iterations', type=int, metavar='N', help='守护模式下最多循环 N 次后退出（调试用）')
     return parser
@@ -137,6 +138,7 @@ def _try_gui(
     *,
     start_watching: bool,
     start_hidden: bool,
+    bootstrap_on_start: bool = False,
 ) -> Optional[int]:
     """尝试启动图形界面；环境不支持时返回 None 以便回退到命令行模式。"""
 
@@ -156,6 +158,7 @@ def _try_gui(
             logger=logger,
             start_watching=start_watching,
             start_hidden=start_hidden,
+            bootstrap_on_start=bootstrap_on_start,
             enable_tray=not args.no_tray,
         )
     except Exception as exc:  # pragma: no cover - 界面初始化失败时兜底
@@ -187,7 +190,11 @@ def _run_auto_setup(cfg: dict, logger: logging.Logger, args: argparse.Namespace)
         logger=logger,
     )
     try:
-        discovered = discovery.setup_config(user_id, password, service)
+        from .portal import _portal_url_from_config
+
+        discovered = discovery.setup_config(
+            user_id, password, service, portal_url=_portal_url_from_config(cfg)
+        )
     except Exception as exc:
         message = '自动获取认证参数失败：%s' % exc
         logger.error(message)
@@ -264,9 +271,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     logger = _setup_logging(cfg, args)
     notifier = _make_notifier(cfg, args)
+    try:
+        config.migrate_plain_password(cfg.get('_config_path') or args.config or config.default_config_path())
+    except Exception as exc:  # pragma: no cover - 迁移失败不影响启动
+        logger.warning('迁移明文密码失败：%s', exc)
     logger.info('%s v%s 启动（配置文件：%s）', PROG, __version__, cfg.get('_config_path'))
 
-    if not args.allow_multiple and not args.status:
+    if not args.allow_multiple and not args.status and not args.bootstrap:
         if not winutil.acquire_single_instance('campus_network_launcher_tool'):
             logger.warning('检测到已有实例在运行，本次退出')
             notifier.warn(
@@ -280,6 +291,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     daemon = Daemon(cfg, notifier=notifier, logger=logging.getLogger('campus_network_launcher.daemon'))
 
     if args.auto_setup:
+        return _run_auto_setup(cfg, logger, args)
+
+    # 保存配置后重启进入的自动执行模式
+    if args.bootstrap:
+        code = _try_gui(cfg, args, logger, start_watching=True, start_hidden=False, bootstrap_on_start=True)
+        if code is not None:
+            return code
+        logger.info('图形界面不可用，--bootstrap 回退为命令行自动获取参数')
         return _run_auto_setup(cfg, logger, args)
     if args.status:
         return _print_status(daemon, cfg)

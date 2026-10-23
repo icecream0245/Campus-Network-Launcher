@@ -437,7 +437,7 @@ class PortalDiscovery:
 
         return '; '.join('%s=%s' % (cookie.name, cookie.value) for cookie in self._jar)
 
-    def setup_config(self, user_id: str, password: str, service: str = '') -> Dict[str, Any]:
+    def setup_config(self, user_id: str, password: str, service: str = '', *, portal_url: str = '') -> Dict[str, Any]:
         """执行一次自动发现，返回可直接写入配置文件的参数。
 
         只访问认证页与 pageInfo，**不会发送登录请求**，因此不会影响当前联网状态。
@@ -450,8 +450,14 @@ class PortalDiscovery:
             raise AutoLoginError('自动配置需要学号与密码')
 
         info, html = self.discover()
+        source = 'probe'
         if info is None:
-            raise AutoLoginError('当前已在线，拿不到认证页参数；请先断开校园网再执行自动配置')
+            # 已在线：认证页通常仍可访问，用配置里保存的地址继续取参数
+            if not portal_url:
+                raise AutoLoginError('当前已在线，且配置里没有认证页地址；请先断开校园网后重试')
+            info = self.build_info(portal_url)
+            html = self.open_portal(info)
+            source = 'online'
 
         page = self.page_info(info)
         chosen_service = choose_service(page, service, html)
@@ -486,6 +492,7 @@ class PortalDiscovery:
                 'service_used': chosen_service,
                 'password_encrypted': encrypt,
                 'modulus_bits': len(modulus) * 4 if modulus else 0,
+                'source': source,
             },
         }
 

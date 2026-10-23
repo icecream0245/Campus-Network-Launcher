@@ -6,12 +6,13 @@ from __future__ import annotations
 
 import copy
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
 import yaml
 
-from campus_network_launcher import config
+from campus_network_launcher import config, winutil
 from campus_network_launcher.daemon import Daemon
 from campus_network_launcher.eportal import AuthResult
 from campus_network_launcher.gui.controller import AppController
@@ -94,13 +95,12 @@ def test_update_auto_fields_replaces_and_keeps_comments(tmp_path):
     assert '# 需要保留的注释' in text
     assert '# 尾部注释' in text
     data = yaml.safe_load(text)
-    assert data['auto'] == {
-        'enabled': True,
-        'user_id': '2023000001',
-        'password': 'secret',
-        'service': '中国电信',
-        'service_options': ['中国电信', '中国移动'],
-    }
+    assert data['auto']['enabled'] is True
+    assert data['auto']['user_id'] == '2023000001'
+    assert data['auto']['password'].startswith('dpapi:')
+    assert winutil.dpapi_unprotect(data['auto']['password']) == 'secret'
+    assert data['auto']['service'] == '中国电信'
+    assert data['auto']['service_options'] == ['中国电信', '中国移动']
     assert data['other'] == 1  # 其它段不受影响
     assert backup and Path(backup).is_file()
 
@@ -125,7 +125,8 @@ def test_update_auto_fields_creates_section_when_absent(tmp_path):
     data = yaml.safe_load(path.read_text(encoding='utf-8'))
     assert data['auto']['enabled'] is True
     assert data['auto']['user_id'] == 'u'
-    assert data['auto']['password'] == 'p'
+    assert data['auto']['password'].startswith('dpapi:')
+    assert winutil.dpapi_unprotect(data['auto']['password']) == 'p'
 
 
 def test_update_auto_fields_result_is_loadable(tmp_path):
@@ -273,7 +274,8 @@ def test_controller_save_profile_writes_file(tmp_path):
     data = yaml.safe_load(Path(cfg['_config_path']).read_text(encoding='utf-8'))
     assert data['auto']['enabled'] is True
     assert data['auto']['user_id'] == '2023000001'
-    assert data['auto']['password'] == 'secret'
+    assert data['auto']['password'].startswith('dpapi:')
+    assert winutil.dpapi_unprotect(data['auto']['password']) == 'secret'
     assert data['auto']['service'] == '中国电信'
     assert data['auto']['service_options'] == ['中国电信', '中国移动']
     assert controller.needs_profile is False
@@ -601,3 +603,140 @@ def test_window_title_and_credit(tmp_path):
     assert title.startswith('Campus Network Launcher v')
     assert 'by:Xiaowu' in title
     assert credit == 'by:Xiaowu'
+
+
+# --------------------------------------------------------------------------- #
+# v2.0.1：密码加密 / 在线抓参 / 一键执行 / 弹窗开关
+# --------------------------------------------------------------------------- #
+def test_password_saved_encrypted_and_loaded_plain(tmp_path):
+    path = tmp_path / 'config.yml'
+    path.write_text('main:\n  version: 3\n', encoding='utf-8')
+
+    config.update_auto_fields(
+        str(path), {'enabled': True, 'user_id': '2023000001', 'password': 'my-secret'}
+    )
+
+    text = path.read_text(encoding='utf-8')
+    assert 'my-secret' not in text  # 明文不落盘
+    assert 'dpapi:' in text
+    data = yaml.safe_load(text)
+    assert winutil.dpapi_unprotect(data['auto']['password']) == 'my-secret'
+
+    loaded = config.load_config(str(path))
+    assert loaded['auto']['password'] == 'my-secret'  # 内存里是明文，登录照常可用
+
+
+def test_migrate_plain_password(tmp_path):
+    path = tmp_path / 'config.yml'
+    path.write_text(
+        'main:\n  version: 3\nauto:\n  enabled: true\n  user_id: "2023000001"\n  password: "plain-pwd"\n',
+        encoding='utf-8',
+    )
+
+    assert config.migrate_plain_password(str(path)) is True
+    text = path.read_text(encoding='utf-8')
+    assert 'plain-pwd' not in text
+    assert 'dpapi:' in text
+    # 已经是密文时不再迁移
+    assert config.migrate_plain_password(str(path)) is False
+
+
+def test_decrypt_failure_clears_password(tmp_path):
+    path = tmp_path / 'config.yml'
+    path.write_text(
+        'main:\n  version: 3\nauto:\n  enabled: true\n  user_id: "2023000001"\n  password: "dpapi:not-a-valid-token"\n',
+        encoding='utf-8',
+    )
+
+    cfg = config.load_config(str(path), allow_incomplete=True)
+
+    assert cfg['auto']['password'] == ''
+    assert cfg.get('_password_lost') is True
+
+
+def test_setup_config_online_uses_portal_url(portal):
+    from campus_network_launcher.portal import PortalDiscovery
+
+    portal.state.online = True
+    portal_url = portal.base_url + '/eportal/index.jsp?wlanuserip=1.2.3.4&wlanacname=mock'
+    discovery = PortalDiscovery(probes=[portal.base_url + '/generate_204'], timeout=3)
+
+    discovered = discovery.setup_config('2023000001', 'secret', '中国电信', portal_url=portal_url)
+
+    assert discovered['details']['source'] == 'online'
+    assert discovered['login_data']['queryString']
+
+
+def test_setup_config_online_without_portal_url_raises(portal):
+    from campus_network_launcher.portal import AutoLoginError, PortalDiscovery
+
+    portal.state.online = True
+    discovery = PortalDiscovery(probes=[portal.base_url + '/generate_204'], timeout=3)
+
+    with pytest.raises(AutoLoginError):
+        discovery.setup_config('2023000001', 'secret', '中国电信')
+
+
+def test_suppress_portal_popup_toggle(tmp_path, monkeypatch):
+    cfg = minimal_cfg(tmp_path)
+    controller = AppController(cfg)
+    calls = {}
+
+    def fake_set(enabled):
+        calls['enabled'] = enabled
+        return True, '已执行'
+
+    monkeypatch.setattr(winutil, 'set_active_probing', fake_set)
+    monkeypatch.setattr(winutil, 'active_probing_enabled', lambda: False)
+
+    ok, message = controller.set_suppress_portal_popup(True)
+
+    assert ok and '已执行' in message
+    assert calls['enabled'] is False  # 屏蔽 = 关闭主动探测
+    assert controller.suppress_portal_popup_enabled() is True
+
+
+def test_bootstrap_first_run_offline(tmp_path, monkeypatch):
+    from campus_network_launcher.portal import PortalDiscovery
+
+    cfg = minimal_cfg(tmp_path, enabled=True, user_id='2023000001', password='secret')
+    Path(cfg['_config_path']).write_text('main:\n  version: 3\n', encoding='utf-8')
+    controller = AppController(cfg)
+    events = []
+    monkeypatch.setattr(controller, '_post', lambda kind, message='', **data: events.append((kind, message)))
+    monkeypatch.setattr(controller.daemon, 'status', lambda: {'online': False})
+    monkeypatch.setattr(controller.daemon, 'login_once', lambda: 0)
+    monkeypatch.setattr(controller, 'reload_config', lambda: 'ok')
+
+    fake_discovered = {
+        'url': {'server': 'http://x', 'login': '/l', 'logout': '/o'},
+        'cookie': '',
+        'login_data': {'userId': '2023000001', 'queryString': 'q'},
+        'headers': {},
+        'details': {'service_used': '中国电信', 'source': 'probe'},
+    }
+    monkeypatch.setattr(PortalDiscovery, 'setup_config', lambda self, *args, **kwargs: fake_discovered)
+
+    assert controller.bootstrap_first_run() is True
+    deadline = time.time() + 5
+    while controller.busy and time.time() < deadline:
+        time.sleep(0.05)
+
+    kinds = [kind for kind, _message in events]
+    assert 'bootstrap_progress' in kinds
+    assert 'bootstrap_ok' in kinds
+
+
+@pytest.mark.skipif(not _can_create_window(), reason='当前环境无法创建图形窗口')
+def test_setup_wizard_mentions_one_click():
+    from campus_network_launcher.gui.dialogs import SetupWizard
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        wizard = SetupWizard(root, services=['中国电信'], on_save=lambda *args: None)
+        hint = wizard.hint_var.get()
+    finally:
+        root.destroy()
+
+    assert '一键执行' in hint

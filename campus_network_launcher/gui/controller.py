@@ -20,7 +20,7 @@ import queue
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .. import autostart
 from .. import config as config_module
@@ -452,7 +452,11 @@ class AppController:
                     timeout=self.cfg['network']['timeout'],
                     logger=self.log,
                 )
-                discovered = discovery.setup_config(user_id, password, service)
+                from ..portal import _portal_url_from_config
+
+                discovered = discovery.setup_config(
+                    user_id, password, service, portal_url=_portal_url_from_config(self.cfg)
+                )
                 new_cfg = config_module.build_config_from_discovery(discovered, auto_cfg=auto)
                 path, backup = config_module.save_config(
                     self.config_path,
@@ -474,6 +478,121 @@ class AppController:
             self._post('auto_setup_ok', message, path=path, backup=backup)
 
         return self._run_worker(task, 'eporta-auto-setup')
+
+    # ------------------------------------------------------------------ #
+    # 系统设置：屏蔽开机认证弹窗
+    # ------------------------------------------------------------------ #
+    def suppress_portal_popup_enabled(self) -> bool:
+        """当前是否已屏蔽 Windows 开机认证弹窗（以注册表为准）。"""
+
+        from .. import winutil
+
+        value = winutil.active_probing_enabled()
+        return value is False
+
+    def set_suppress_portal_popup(self, enabled: bool) -> Tuple[bool, str]:
+        """开/关屏蔽开机弹窗。返回 (是否成功, 提示文本)。"""
+
+        from .. import winutil
+
+        ok, message = winutil.set_active_probing(not enabled)
+        if ok:
+            self.cfg.setdefault('system', {})['suppress_portal_popup'] = bool(enabled)
+            self.log.info('屏蔽开机弹窗：%s', '已开启' if enabled else '已关闭')
+        return ok, message
+
+    # ------------------------------------------------------------------ #
+    # 一键执行（保存配置后重启进入，自动完成抓参与登录）
+    # ------------------------------------------------------------------ #
+    def bootstrap_first_run(self) -> bool:
+        """一键执行：判断在线状态 → 抓参 → 登录（必要时先断网）。"""
+
+        def task() -> None:
+            from .. import config as config_module
+            from ..portal import PortalDiscovery, _portal_url_from_config
+
+            auto = self.cfg.get('auto') or {}
+            login_data = self.cfg.get('login_data') or {}
+            user_id = str(auto.get('user_id') or login_data.get('userId') or '')
+            password = str(auto.get('password') or '')
+            service = str(auto.get('service') or '')
+            if not user_id or not password:
+                self._post('bootstrap_fail', '一键执行失败：缺少学号或密码')
+                return
+
+            self._post('bootstrap_progress', '一键执行：检测当前网络状态…')
+            try:
+                online = bool(self.daemon.status().get('online'))
+            except Exception as exc:  # pragma: no cover - 探测异常
+                self.log.warning('检测网络状态失败：%s', exc)
+                online = False
+
+            discovery = PortalDiscovery(
+                probes=self.cfg['network']['probes'],
+                timeout=self.cfg['network']['timeout'],
+                logger=self.log,
+            )
+
+            discovered = None
+            if online:
+                self._post('bootstrap_progress', '一键执行：已联网，尝试在线获取认证参数…')
+                try:
+                    discovered = discovery.setup_config(
+                        user_id, password, service, portal_url=_portal_url_from_config(self.cfg)
+                    )
+                except Exception as exc:
+                    self.log.info('在线取参失败（%s），改为断网后重新获取', exc)
+                    self._post('bootstrap_progress', '一键执行：先断开网络，再获取认证参数…')
+                    try:
+                        self.daemon.logout_once()
+                    except Exception as logout_exc:  # pragma: no cover
+                        self.log.warning('断网失败：%s', logout_exc)
+                    time.sleep(2.0)
+                    try:
+                        discovered = discovery.setup_config(user_id, password, service)
+                    except Exception as retry_exc:
+                        self._post('bootstrap_fail', '一键执行失败：%s' % retry_exc)
+                        return
+            else:
+                self._post('bootstrap_progress', '一键执行：未联网，直接获取认证参数…')
+                try:
+                    discovered = discovery.setup_config(user_id, password, service)
+                except Exception as exc:
+                    self._post('bootstrap_fail', '一键执行失败：%s' % exc)
+                    return
+
+            self._post('bootstrap_progress', '一键执行：写入认证参数…')
+            try:
+                new_cfg = config_module.build_config_from_discovery(discovered, auto_cfg=auto)
+                _path, backup = config_module.save_config(
+                    self.config_path,
+                    new_cfg,
+                    header=config_module.discovered_header(discovered),
+                )
+            except Exception as exc:
+                self._post('bootstrap_fail', '一键执行失败：写入配置出错：%s' % exc)
+                return
+
+            self.reload_config()
+            self._post('bootstrap_progress', '一键执行：正在登录认证…')
+            try:
+                code = self.daemon.login_once()
+            except Exception as exc:  # pragma: no cover
+                self._post('bootstrap_fail', '一键执行失败：登录异常：%s' % exc)
+                return
+
+            details = discovered.get('details') or {}
+            if code == EXIT_OK:
+                source = '在线取参' if details.get('source') == 'online' else '断网取参'
+                self._post(
+                    'bootstrap_ok',
+                    '一键执行完成：已联网（%s，服务商 %s，备份 %s）'
+                    % (source, details.get('service_used') or '-', backup or '无'),
+                )
+            else:
+                self._post('bootstrap_fail', '一键执行：参数已写入，但登录未成功，可稍后点「立即登录」重试')
+
+        return self._run_worker(task, 'eporta-bootstrap')
 
     # ------------------------------------------------------------------ #
     # 开机自启
